@@ -1,0 +1,1707 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "2e1584d6a724ca9d3ec19b33ae9b1f57",
+     "grade": false,
+     "grade_id": "cell-52506fc51faeb1a1",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "# HW3\n",
+    "\n",
+    "## Overview\n",
+    "\n",
+    "In this homework, you will use RNN with attention mechanism on diagnosis codes."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "32e72084469253ba7b428e2d0bd46613",
+     "grade": false,
+     "grade_id": "cell-dcd6c662fba70926",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "---"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 79,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-10-22T17:53:28.581188Z",
+     "start_time": "2020-10-22T17:53:28.287620Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "b22c46233e1158d940e1877965a097a2",
+     "grade": false,
+     "grade_id": "cell-4fe346254a16fed8",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "import os\n",
+    "import pickle\n",
+    "import random\n",
+    "import numpy as np\n",
+    "import torch\n",
+    "import torch.nn as nn\n",
+    "import torch.nn.functional as F\n",
+    "\n",
+    "# set seed\n",
+    "seed = 24\n",
+    "random.seed(seed)\n",
+    "np.random.seed(seed)\n",
+    "torch.manual_seed(seed)\n",
+    "os.environ[\"PYTHONHASHSEED\"] = str(seed)\n",
+    "\n",
+    "\n",
+    "# Define data path\n",
+    "DATA_PATH = \"./data\"\n",
+    "if not os.path.isdir(DATA_PATH): DATA_PATH = \"../HW3_RNN-lib/data\"\n",
+    "assert os.path.isdir(DATA_PATH)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "212e434fd38be5ca223e82a1e1fddf5b",
+     "grade": false,
+     "grade_id": "cell-71f2f1fcbf0214c3",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "---"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "0fafc343190c45720b4f83831aa4b556",
+     "grade": false,
+     "grade_id": "cell-f24c5a8a552afa64",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "## Mortality Prediction with RNN\n",
+    "\n",
+    "We will first implement a naive RNN model for mortality prediction using the diagnosis codes. This will be our backbone model. Then, we will implement a RNN model with attention.\n",
+    "\n",
+    "We will be using the *ADMISSIONS*, *DIAGNOSES_ICD*, and *PATIENTS* tables from [MIMIC-III](https://mimic.physionet.org/gettingstarted/access/) dataset. Here is an overview of the three tables.\n",
+    "\n",
+    "-  *ADMISSIONS*: Define a patient’s hospital admission, HADM_ID.\n",
+    "- *DIAGNOSES_ICD*: Contains ICD diagnoses for patients, most notably ICD-9 diagnoses.\n",
+    "- *PATIENTS*: Defines each SUBJECT_ID in the database, i.e. defines a single patient.\n",
+    "\n",
+    "The data has been preprocessed for you. Let us load them and take a look."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 80,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-10-22T17:53:28.644594Z",
+     "start_time": "2020-10-22T17:53:28.592220Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "b30aa54497542e84f77996ae93d1cfc6",
+     "grade": false,
+     "grade_id": "cell-0d031c45ba4a787e",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "pids = pickle.load(open(os.path.join(DATA_PATH,'mimic3.pids'), 'rb'))\n",
+    "dates = pickle.load(open(os.path.join(DATA_PATH,'mimic3.dates'), 'rb'))\n",
+    "morts = pickle.load(open(os.path.join(DATA_PATH,'mimic3.morts'), 'rb'))\n",
+    "seqs = pickle.load(open(os.path.join(DATA_PATH,'mimic3.3digitICD9.seqs'), 'rb'))\n",
+    "types = pickle.load(open(os.path.join(DATA_PATH,'mimic3.3digitICD9.types'), 'rb'))\n",
+    "rtypes = dict([(v,k) for k,v in types.items()])\n",
+    "\n",
+    "assert len(pids) == len(dates) == len(morts) == len(seqs) == 6029\n",
+    "assert len(types) == 942"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "3b9652dbed3e5c26e3ba645edb738cab",
+     "grade": false,
+     "grade_id": "cell-66a0abe057d9ca85",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "where\n",
+    "\n",
+    "- `pids`: contains the patient ids\n",
+    "- `dates`: contains a list of admission dates for each patient\n",
+    "- `morts`: contains the mortality information (0: alive, 1: dead)\n",
+    "- `seqs`: contains a list of ICD-9 labels for admission of each patient\n",
+    "- `types`: contains the map from 3-digit ICD-9 codes to ICD-9 labels\n",
+    "- `rtypes`: contains the map from ICD-9 labels to 3-digit ICD-9 codes\n",
+    "\n",
+    "Let us take a patient as an example."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 81,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-10-22T17:53:28.651143Z",
+     "start_time": "2020-10-22T17:53:28.646429Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "cf82eb799a7c078237828e0c3152f308",
+     "grade": false,
+     "grade_id": "cell-ae331190a6d48106",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Patient ID: 52952\n",
+      "Mortality: 0\n",
+      "# of admissions: 2\n",
+      "\t0-th admission date: 2189-07-19 16:41:00\n",
+      "\t0-th admission diagnosis labels: [65, 70, 207, 58, 20, 88, 63, 15]\n",
+      "\t0-th admission diagnosis codes: ['D_008', 'D_285', 'D_296', 'D_276', 'D_244', 'D_287', 'D_458', 'D_427']\n",
+      "\t1-th admission date: 2189-07-27 17:15:00\n",
+      "\t1-th admission diagnosis labels: [65, 207, 28, 58, 288, 210, 405, 20, 15, 327]\n",
+      "\t1-th admission diagnosis codes: ['D_008', 'D_296', 'D_453', 'D_276', 'D_E880', 'D_E849', 'D_801', 'D_244', 'D_427', 'D_282']\n"
+     ]
+    }
+   ],
+   "source": [
+    "# take the 3-rd patient as an example\n",
+    "\n",
+    "print(\"Patient ID:\", pids[3])\n",
+    "print(\"Mortality:\", morts[3])\n",
+    "print(\"# of admissions:\", len(dates[3]))\n",
+    "for visit in range(len(dates[3])):\n",
+    "    print(f\"\\t{visit}-th admission date:\", dates[3][visit])\n",
+    "    print(f\"\\t{visit}-th admission diagnosis labels:\", seqs[3][visit])\n",
+    "    print(f\"\\t{visit}-th admission diagnosis codes:\", [rtypes[label] for label in seqs[3][visit]])"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "30607c6514b0b92e6a0d2877f832f9fe",
+     "grade": false,
+     "grade_id": "cell-945119717fb61cc7",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "Note that `seqs` is a list of list of list. That is, `seqs[i][j][k]` gives you the k-th diagnosis codes for the j-th visit for the i-th patient.\n",
+    "\n",
+    "And you can look up the meaning of the ICD-9 code online. For example, `D_427` represetns *cardiac dysrhythmias*.\n",
+    "\n",
+    "Further, let see number of mortalities cases."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 82,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-10-22T17:53:28.655418Z",
+     "start_time": "2020-10-22T17:53:28.652789Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "59f3528139dcbaefb15fcd8ee775253d",
+     "grade": false,
+     "grade_id": "cell-e6d339169f140694",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "number of mortalities: 2243\n",
+      "ratio of mortalities: 0.37\n"
+     ]
+    }
+   ],
+   "source": [
+    "print(\"number of mortalities:\", sum(morts))\n",
+    "print(\"ratio of mortalities: %.2f\" % (sum(morts) / len(morts)))"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-10-21T13:05:03.202250Z",
+     "start_time": "2020-10-21T13:05:03.199011Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "c20a3d6188476868bb0477e6493dcc29",
+     "grade": false,
+     "grade_id": "cell-0a48d6dcc0f5b4ad",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "Now we have the data. Let us build the naive RNN."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "97c8172c96e13c577ea3522eb592af4c",
+     "grade": false,
+     "grade_id": "cell-308c526175fdb62e",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "### 1 Build the dataset [30 points]\n",
+    "\n",
+    "#### 1.1 CustomDataset [5 points]\n",
+    "\n",
+    "First, let us implement a custom dataset using PyTorch class `Dataset`, which will characterize the key features of the dataset we want to generate.\n",
+    "\n",
+    "We will use the sequences of diagnosis codes `seqs` as input and mortality `morts` as output.\n",
+    "\n",
+    "Note that we can still use `TorchText` as it provides a generic way to deal with sequential data. But we will implement the `Dataset` from scratch this time so that you can have more hands-on experience."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 83,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-10-22T17:53:28.661203Z",
+     "start_time": "2020-10-22T17:53:28.657245Z"
+    },
+    "deletable": false
+   },
+   "outputs": [],
+   "source": [
+    "from torch.utils.data import Dataset\n",
+    "\n",
+    "class CustomDataset(Dataset):\n",
+    "    \n",
+    "    def __init__(self, seqs, morts):\n",
+    "        \n",
+    "        \"\"\"\n",
+    "        TODO: Store `seqs`. to `self.x` and `morts` to `self.y`.\n",
+    "        \n",
+    "        Note that you DO NOT need to covert them to tensor as we will do this later.\n",
+    "        Do NOT permute the data.\n",
+    "        \"\"\"\n",
+    "        \n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        self.x = seqs\n",
+    "        self.y = morts\n",
+    "    \n",
+    "    def __len__(self):\n",
+    "        \n",
+    "        \"\"\"\n",
+    "        TODO: Return the number of samples (i.e. patients).\n",
+    "        \"\"\"\n",
+    "        \n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        return len(self.x)\n",
+    "    \n",
+    "    def __getitem__(self, index):\n",
+    "        \n",
+    "        \"\"\"\n",
+    "        TODO: Generates one sample of data.\n",
+    "        \n",
+    "        Note that you DO NOT need to covert them to tensor as we will do this later.\n",
+    "        \"\"\"\n",
+    "        \n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        return (self.x[index], self.y[index])\n",
+    "\n",
+    "dataset = CustomDataset(seqs, morts)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 84,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-10-22T17:53:28.710056Z",
+     "start_time": "2020-10-22T17:53:28.665948Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "96b8cfc5a627421f196649d51fb70f7e",
+     "grade": true,
+     "grade_id": "cell-cc0baa6c9dadef8c",
+     "locked": true,
+     "points": 5,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "\n",
+    "dataset = CustomDataset(seqs, morts)\n",
+    "\n",
+    "assert len(dataset) == 6029\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "3cf122343872b0abf040766a20efa10d",
+     "grade": false,
+     "grade_id": "cell-de0d816943d88377",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "#### 1.2 Collate Function [20 points]\n",
+    "\n",
+    "As you note that, we do not convert the data to tensor in the built `CustomDataset`. Instead, we will do this using a collate function `collate_fn()`. \n",
+    "\n",
+    "This collate function `collate_fn()` will be called by `DataLoader` after fetching a list of samples using the indices from `CustomDataset` to collate the list of samples into batches.\n",
+    "\n",
+    "For example, assume the `DataLoader` gets a list of two samples.\n",
+    "\n",
+    "```\n",
+    "[ [ [0, 1, 2], [8, 0] ], \n",
+    "  [ [12, 13, 6, 7], [12], [23, 11] ] ]\n",
+    "```\n",
+    "\n",
+    "where the first sample has two visits `[0, 1, 2]` and `[8, 0]` and the second sample has three visits `[12, 13, 6, 7]`, `[12]`, and `[23, 11]`.\n",
+    "\n",
+    "The collate function `collate_fn()` is supposed to pad them into the same shape (3, 4), where 3 is the maximum number of visits and 4 is the maximum number of diagnosis codes.\n",
+    "\n",
+    "``` \n",
+    "[ [ [0, 1, 2, *0*], [8, 0, *0*, *0*], [*0*, *0*, *0*, *0*]  ], \n",
+    "  [ [12, 13, 6, 7], [12, *0*, *0*, *0*], [23, 11, *0*, *0*] ] ]\n",
+    "```\n",
+    "\n",
+    "Further, the padding information will be stored in a mask with the same shape, where 1 indicates that the diagnosis code at this position is from the original input, and 0 indicates that the diagnosis code at this position is the padded value.\n",
+    "\n",
+    "```\n",
+    "[ [ [1, 1, 1, 0], [1, 1, 0, 0], [0, 0, 0, 0] ], \n",
+    "  [ [1, 1, 1, 1], [1, 0, 0, 0], [1, 1, 0, 0] ] ]\n",
+    "```\n",
+    "\n",
+    "Lastly, we will have another diagnosis sequence in reversed time. This will be used in our RNN model for masking. Note that we only flip the true visits.\n",
+    "\n",
+    "``` \n",
+    "[ [ [8, 0, *0*, *0*], [0, 1, 2, *0*], [*0*, *0*, *0*, *0*]  ], \n",
+    "  [ [23, 11, *0*, *0*], [12, *0*, *0*, *0*], [12, 13, 6, 7] ] ]\n",
+    "```\n",
+    "\n",
+    "And a reversed mask as well.\n",
+    "\n",
+    "```\n",
+    "[ [ [1, 1, 0, 0], [1, 1, 1, 0], [0, 0, 0, 0] ], \n",
+    "  [ [1, 1, 0, 0], [1, 0, 0, 0], [1, 1, 1, 1], ] ]\n",
+    "```\n",
+    "\n",
+    "We need to pad the sequences into the same length so that we can do batch training on GPU. And we also need this mask so that when training, we can ignored the padded value as they actually do not contain any information."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 85,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-10-22T17:53:28.720194Z",
+     "start_time": "2020-10-22T17:53:28.713141Z"
+    },
+    "deletable": false
+   },
+   "outputs": [],
+   "source": [
+    "def collate_fn(data):\n",
+    "    \"\"\"\n",
+    "    TODO: Collate the the list of samples into batches. For each patient, you need to pad the diagnosis\n",
+    "        sequences to the sample shape (max # visits, max # diagnosis codes). The padding infomation\n",
+    "        is stored in `mask`.\n",
+    "    \n",
+    "    Arguments:\n",
+    "        data: a list of samples fetched from `CustomDataset`\n",
+    "        \n",
+    "    Outputs:\n",
+    "        x: a tensor of shape (# patiens, max # visits, max # diagnosis codes) of type torch.long\n",
+    "        masks: a tensor of shape (# patiens, max # visits, max # diagnosis codes) of type torch.bool\n",
+    "        rev_x: same as x but in reversed time. This will be used in our RNN model for masking \n",
+    "        rev_masks: same as mask but in reversed time. This will be used in our RNN model for masking\n",
+    "        y: a tensor of shape (# patiens) of type torch.float\n",
+    "        \n",
+    "    Note that you can obtains the list of diagnosis codes and the list of mortality labels\n",
+    "        using: `sequences, labels = zip(*data)`\n",
+    "    \"\"\"\n",
+    "\n",
+    "    sequences, labels = zip(*data)\n",
+    "    # your code here\n",
+    "    # raise NotImplementedError\n",
+    "    \n",
+    "    y = torch.tensor(labels, dtype=torch.float)\n",
+    "    \n",
+    "    num_patients = len(sequences)\n",
+    "    num_visits = [len(patient) for patient in sequences]\n",
+    "    num_codes = [len(visit) for patient in sequences for visit in patient]\n",
+    "\n",
+    "    max_num_visits = max(num_visits)\n",
+    "    max_num_codes = max(num_codes)\n",
+    "        \n",
+    "    x = torch.zeros((num_patients, max_num_visits, max_num_codes), dtype=torch.long)\n",
+    "    rev_x = torch.zeros((num_patients, max_num_visits, max_num_codes), dtype=torch.long)\n",
+    "    masks = torch.zeros((num_patients, max_num_visits, max_num_codes), dtype=torch.bool)\n",
+    "    rev_masks = torch.zeros((num_patients, max_num_visits, max_num_codes), dtype=torch.bool)\n",
+    "\n",
+    "    for i_patient, patient in enumerate(sequences):\n",
+    "        v = len(patient)\n",
+    "        # print(\"New Patient %s\", v)\n",
+    "        for j_visit, visit in enumerate(patient):\n",
+    "            l = len(visit)\n",
+    "            x[i_patient, j_visit, :l] = torch.tensor(visit, dtype=torch.long)\n",
+    "            masks[i_patient, j_visit, :l].fill_(1)\n",
+    "            # print(v-j_visit)\n",
+    "            rev_x[i_patient, v-j_visit-1, :l] = torch.tensor(visit, dtype=torch.long)\n",
+    "            rev_masks[i_patient, v-j_visit-1, :l].fill_(1)          \n",
+    "\n",
+    "    \n",
+    "    return x, masks, rev_x, rev_masks, y"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 86,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-10-22T17:53:28.733347Z",
+     "start_time": "2020-10-22T17:53:28.722159Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "758a82c5ee21e04c4c31cc8d20949a4d",
+     "grade": true,
+     "grade_id": "cell-4b3472bbf5973793",
+     "locked": true,
+     "points": 20,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "\n",
+    "from torch.utils.data import DataLoader\n",
+    "\n",
+    "loader = DataLoader(dataset, batch_size=10, collate_fn=collate_fn)\n",
+    "loader_iter = iter(loader)\n",
+    "x, masks, rev_x, rev_masks, y = next(loader_iter)\n",
+    "\n",
+    "assert x.dtype == rev_x.dtype == torch.long\n",
+    "assert y.dtype == torch.float\n",
+    "assert masks.dtype == rev_masks.dtype == torch.bool\n",
+    "\n",
+    "assert x.shape == rev_x.shape == masks.shape == rev_masks.shape == (10, 10, 31)\n",
+    "assert y.shape == (10,)\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "cf11addba53d9041094d45051435cb7e",
+     "grade": false,
+     "grade_id": "cell-125312ce2d90406a",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "Now we have `CustomDataset` and `collate_fn()`. Let us split the dataset into training and validation sets."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 87,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-10-22T17:53:28.738676Z",
+     "start_time": "2020-10-22T17:53:28.734828Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "cc4a76fda00ecaef5a2e8857a49fb5f2",
+     "grade": false,
+     "grade_id": "cell-7f2e734b97c94232",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Length of train dataset: 4823\n",
+      "Length of val dataset: 1206\n"
+     ]
+    }
+   ],
+   "source": [
+    "from torch.utils.data.dataset import random_split\n",
+    "\n",
+    "split = int(len(dataset)*0.8)\n",
+    "\n",
+    "lengths = [split, len(dataset) - split]\n",
+    "train_dataset, val_dataset = random_split(dataset, lengths)\n",
+    "\n",
+    "print(\"Length of train dataset:\", len(train_dataset))\n",
+    "print(\"Length of val dataset:\", len(val_dataset))"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "aa9d83fcdb30dc6d7525ff26f474de1b",
+     "grade": false,
+     "grade_id": "cell-c9732f7be72cb6e4",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "#### 1.3 DataLoader [5 points]\n",
+    "\n",
+    "Now, we can load the dataset into the data loader."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 88,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-10-22T17:53:28.743380Z",
+     "start_time": "2020-10-22T17:53:28.740290Z"
+    },
+    "deletable": false
+   },
+   "outputs": [],
+   "source": [
+    "from torch.utils.data import DataLoader\n",
+    "\n",
+    "def load_data(train_dataset, val_dataset, collate_fn):\n",
+    "    \n",
+    "    '''\n",
+    "    TODO: Implement this function to return the data loader for  train and validation dataset. \n",
+    "    Set batchsize to 32. Set `shuffle=True` only for train dataloader.\n",
+    "    \n",
+    "    Arguments:\n",
+    "        train dataset: train dataset of type `CustomDataset`\n",
+    "        val dataset: validation dataset of type `CustomDataset`\n",
+    "        collate_fn: collate function\n",
+    "        \n",
+    "    Outputs:\n",
+    "        train_loader, val_loader: train and validation dataloaders\n",
+    "    \n",
+    "    Note that you need to pass the collate function to the data loader `collate_fn()`.\n",
+    "    '''\n",
+    "    \n",
+    "    # your code here\n",
+    "    # raise NotImplementedError\n",
+    "    batch_size=32\n",
+    "    \n",
+    "    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)\n",
+    "    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)\n",
+    "    \n",
+    "    return train_loader, val_loader\n",
+    "\n",
+    "\n",
+    "train_loader, val_loader = load_data(train_dataset, val_dataset, collate_fn)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 89,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-10-22T17:53:28.747197Z",
+     "start_time": "2020-10-22T17:53:28.744761Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "fc8ed2fead5719692139c1f3305e28b5",
+     "grade": true,
+     "grade_id": "cell-0c30a49563819f13",
+     "locked": true,
+     "points": 5,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "\n",
+    "train_loader, val_loader = load_data(train_dataset, val_dataset, collate_fn)\n",
+    "\n",
+    "assert len(train_loader) == 151, \"Length of train_loader should be 151, instead we got %d\"%(len(train_loader))\n",
+    "\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "306dc75a049e05889a0e083300608cab",
+     "grade": false,
+     "grade_id": "cell-9739d5ae7e1cafc5",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "### 2 Naive RNN [35 points]\n",
+    "\n",
+    "Let us implement a naive RNN model. This will be our backbone model.\n",
+    "\n",
+    "<img src=./imgs/rnn-input.png>\n",
+    "\n",
+    "Remember from class that, first of all, we need to transform the diagnosis for each visit of a patient to multi-hot vector and passes it through an embedding layer. To do this, we can use `nn.Embedding()`, where `num_embeddings` is the number of diagnosis codes and `embedding_dim` is the embedding dimension."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "f99cab5c8b94e2d95f5d699c17064a80",
+     "grade": false,
+     "grade_id": "cell-7fa15685c339c1c7",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "<img src=./imgs/naive-rnn.png>\n",
+    "\n",
+    "Then, we can construct this simple RNN structure. So each input is this multi-hot vector. At the 0-th visit, this has $\\boldsymbol{X}_0$, and at t-th visit, this has $\\boldsymbol{X}_t$.\n",
+    "\n",
+    "Each one of them will then map to a hidden state $\\boldsymbol{h}_t$. The hidden state $\\boldsymbol{h}_t$ can be determined by $\\boldsymbol{h}_{t-1}$ and the corresponding current input $\\boldsymbol{X}_t$.\n",
+    "\n",
+    "Finally, once we have the $\\boldsymbol{h}_T$, the hidden state of the last timestamp, then we can use this as feature vectors and train a NN to perform the classification."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "d524deef94259bde4bf693cfd5dd24c8",
+     "grade": false,
+     "grade_id": "cell-750f2f7f3226048f",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "Now, let us build this model. The forward steps will be:\n",
+    "\n",
+    "    1. Pass the sequence through the embedding layer;\n",
+    "    2. Sum the embeddings for each diagnosis code up for a visit of a patient;\n",
+    "    3. Pass the embegginds through the RNN layer;\n",
+    "    4. Obtain the hidden state at the last visit;\n",
+    "    5. Pass the hidden state through the linear and activation layers."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "158fe3842a67563ac4972984ff946460",
+     "grade": false,
+     "grade_id": "cell-a9cb7f4d8889ca27",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "#### 2.1 Mask Selection [20 points]\n",
+    "\n",
+    "Importantly, you need to use `masks` to mask out the paddings in before step 2 and before 4. So, let us first preform the mask selection."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 90,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-10-22T17:53:28.751569Z",
+     "start_time": "2020-10-22T17:53:28.748891Z"
+    },
+    "deletable": false
+   },
+   "outputs": [],
+   "source": [
+    "def sum_embeddings_with_mask(x, masks):\n",
+    "    \"\"\"\n",
+    "    TODO: mask select the embeddings for true visits (not padding visits) and then\n",
+    "        sum the embeddings for each visit up.\n",
+    "\n",
+    "    Arguments:\n",
+    "        x: the embeddings of diagnosis sequence of shape (batch_size, # visits, # diagnosis codes, embedding_dim)\n",
+    "        masks: the padding masks of shape (batch_size, # visits, # diagnosis codes)\n",
+    "\n",
+    "    Outputs:\n",
+    "        sum_embeddings: the sum of embeddings of shape (batch_size, # visits, embedding_dim)\n",
+    "        \n",
+    "    NOTE: Do NOT use for loop.\n",
+    "\n",
+    "    \"\"\"\n",
+    "    \n",
+    "    # your code here\n",
+    "    # raise NotImplementedError\n",
+    "    \n",
+    "    x = x * masks.unsqueeze(-1) \n",
+    "    sum_embeddings = torch.sum(x, dim = -2)\n",
+    "    \n",
+    "    return sum_embeddings"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 91,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-10-22T17:53:28.835080Z",
+     "start_time": "2020-10-22T17:53:28.752946Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "bf2ca473060eda35326593899a7fb2ae",
+     "grade": true,
+     "grade_id": "cell-e2e6868f7bd913f8",
+     "locked": true,
+     "points": 10,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "\n",
+    "import random\n",
+    "import ast\n",
+    "import inspect\n",
+    "\n",
+    "\n",
+    "def uses_loop(function):\n",
+    "    loop_statements = ast.For, ast.While, ast.AsyncFor\n",
+    "\n",
+    "    nodes = ast.walk(ast.parse(inspect.getsource(function)))\n",
+    "    return any(isinstance(node, loop_statements) for node in nodes)\n",
+    "\n",
+    "def generate_random_mask(batch_size, max_num_visits , max_num_codes):\n",
+    "    num_visits = [random.randint(1, max_num_visits) for _ in range(batch_size)]\n",
+    "    num_codes = []\n",
+    "    for n in num_visits:\n",
+    "        num_codes_visit = [0] * max_num_visits\n",
+    "        for i in range(n):\n",
+    "            num_codes_visit[i] = (random.randint(1, max_num_codes))\n",
+    "        num_codes.append(num_codes_visit)\n",
+    "    masks = [torch.ones((l,), dtype=torch.bool) for num_codes_visit in num_codes for l in num_codes_visit]\n",
+    "    masks = torch.stack([torch.cat([i, i.new_zeros(max_num_codes - i.size(0))], 0) for i in masks], 0)\n",
+    "    masks = masks.view((batch_size, max_num_visits, max_num_codes)).bool()\n",
+    "    return masks\n",
+    "\n",
+    "\n",
+    "batch_size = 16\n",
+    "max_num_visits = 10\n",
+    "max_num_codes = 20\n",
+    "embedding_dim = 100\n",
+    "\n",
+    "torch.random.manual_seed(7)\n",
+    "x = torch.randn((batch_size, max_num_visits , max_num_codes, embedding_dim))\n",
+    "masks = generate_random_mask(batch_size, max_num_visits , max_num_codes)\n",
+    "out = sum_embeddings_with_mask(x, masks)\n",
+    "\n",
+    "assert uses_loop(sum_embeddings_with_mask) is False\n",
+    "assert out.shape == (batch_size, max_num_visits, embedding_dim)\n",
+    "\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 92,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-10-22T17:53:28.840226Z",
+     "start_time": "2020-10-22T17:53:28.836825Z"
+    },
+    "deletable": false
+   },
+   "outputs": [],
+   "source": [
+    "def get_last_visit(hidden_states, masks):\n",
+    "    \"\"\"\n",
+    "    TODO: obtain the hidden state for the last true visit (not padding visits)\n",
+    "\n",
+    "    Arguments:\n",
+    "        hidden_states: the hidden states of each visit of shape (batch_size, # visits, embedding_dim)\n",
+    "        masks: the padding masks of shape (batch_size, # visits, # diagnosis codes)\n",
+    "\n",
+    "    Outputs:\n",
+    "        last_hidden_state: the hidden state for the last true visit of shape (batch_size, embedding_dim)\n",
+    "        \n",
+    "    NOTE: DO NOT use for loop.\n",
+    "    \n",
+    "    HINT: Consider using `torch.gather()`.\n",
+    "    \"\"\"\n",
+    "    \n",
+    "    # your code here\n",
+    "    # raise NotImplementedError\n",
+    "    sum_masks = masks.sum(axis = 2)\n",
+    "    lens = ((sum_masks > 0).sum(axis = 1) - 1) \n",
+    "    lens = lens.unsqueeze(-1)\n",
+    "    indices = lens.repeat(1, hidden_states.shape[2])\n",
+    "    indices = indices.unsqueeze(1)\n",
+    "    # print(hidden_states.shape, masks.shape, sum_masks.shape, lens.shape, indices.shape)\n",
+    "\n",
+    "    last_visit = torch.gather(hidden_states, 1, indices)\n",
+    "    last_visit = last_visit.squeeze(1)\n",
+    "    \n",
+    "    return last_visit\n",
+    "    "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 93,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-10-22T17:53:28.853347Z",
+     "start_time": "2020-10-22T17:53:28.841945Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "a57f7f7d77bd03e1d4f0b3e53cca7ec7",
+     "grade": true,
+     "grade_id": "cell-611bb60b8cff5f77",
+     "locked": true,
+     "points": 10,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "\n",
+    "assert uses_loop(get_last_visit) is False\n",
+    "\n",
+    "max_num_visits = 10\n",
+    "batch_size = 16\n",
+    "max_num_codes = 20\n",
+    "embedding_dim = 100\n",
+    "\n",
+    "torch.random.manual_seed(7)\n",
+    "hidden_states = torch.randn((batch_size, max_num_visits, embedding_dim))\n",
+    "masks = generate_random_mask(batch_size, max_num_visits , max_num_codes)\n",
+    "out = get_last_visit(hidden_states, masks)\n",
+    "\n",
+    "assert out.shape == (batch_size, embedding_dim)\n",
+    "\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "2a22955c5dfd4a4d3a4e26320683574e",
+     "grade": false,
+     "grade_id": "cell-51a88c33b34e6827",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "#### 2.2 Build NaiveRNN [15 points]"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 94,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-10-22T17:53:28.867830Z",
+     "start_time": "2020-10-22T17:53:28.854980Z"
+    },
+    "deletable": false
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "NaiveRNN(\n",
+       "  (em): Embedding(942, 128)\n",
+       "  (gru): GRU(128, 128, batch_first=True)\n",
+       "  (fc): Linear(in_features=128, out_features=1, bias=True)\n",
+       "  (sigmoid): Sigmoid()\n",
+       ")"
+      ]
+     },
+     "execution_count": 94,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "class NaiveRNN(nn.Module):\n",
+    "    \n",
+    "    \"\"\"\n",
+    "    TODO: implement the naive RNN model above.\n",
+    "    \"\"\"\n",
+    "    \n",
+    "    def __init__(self, num_codes):\n",
+    "        super().__init__()\n",
+    "        \"\"\"\n",
+    "        TODO: \n",
+    "            1. Define the embedding layer using `nn.Embedding`. Set `embDimSize` to 128.\n",
+    "            2. Define the RNN using `nn.GRU()`; Set `hidden_size` to 128. Set `batch_first` to True.\n",
+    "            3. Define the linear layers using `nn.Linear()`; Set `output_size` to 1.\n",
+    "            4. Define the final activation layer using `nn.Sigmoid().\n",
+    "\n",
+    "        Arguments:\n",
+    "            num_codes: total number of diagnosis codes\n",
+    "        \"\"\"\n",
+    "        \n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        embDimSize = 128\n",
+    "        self.em = nn.Embedding(num_embeddings=num_codes, embedding_dim=embDimSize)\n",
+    "        self.gru = nn.GRU(input_size=128, hidden_size=128, batch_first=True)\n",
+    "        self.fc = nn.Linear(in_features= 128, out_features=1)\n",
+    "        self.sigmoid = nn.Sigmoid()\n",
+    "        \n",
+    "    \n",
+    "    def forward(self, x, masks, rev_x, rev_masks):\n",
+    "        \"\"\"\n",
+    "        TODO:\n",
+    "            1. Pass the sequence through the embedding layer;\n",
+    "            2. Sum the embeddings for each diagnosis code up for a visit of a patient.\n",
+    "               Use `sum_embeddings_with_mask()`;\n",
+    "            3. Pass the embegginds through the RNN layer;\n",
+    "            4. Obtain the hidden state at the last visit.\n",
+    "               Use `get_last_visit()`;\n",
+    "            5. Pass the hidden state through the linear and activation layers.\n",
+    "            \n",
+    "        Arguments:\n",
+    "            x: the diagnosis sequence of shape (batch_size, # visits, # diagnosis codes)\n",
+    "            masks: the padding masks of shape (batch_size, # visits, # diagnosis codes)\n",
+    "\n",
+    "        Outputs:\n",
+    "            probs: probabilities of shape (batch_size)\n",
+    "            \n",
+    "        Note that rev_x, rev_masks are passed in as arguments so that we can use the same \n",
+    "        training and validation function for both models. You can ignore the them here.\n",
+    "        \"\"\"\n",
+    "        \n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        embedding = self.em(x)\n",
+    "        sum_em = sum_embeddings_with_mask(embedding, masks)\n",
+    "        output, hidden = self.gru(sum_em)\n",
+    "        last_hidden = get_last_visit(output, masks)\n",
+    "        fc1 = self.fc(last_hidden)\n",
+    "        return(self.sigmoid(fc1).squeeze())\n",
+    "    \n",
+    "\n",
+    "# load the model here\n",
+    "naive_rnn = NaiveRNN(num_codes = len(types))\n",
+    "naive_rnn"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 95,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-10-22T17:53:28.872510Z",
+     "start_time": "2020-10-22T17:53:28.869257Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "5fe9525257653b17c67f226bf3036715",
+     "grade": true,
+     "grade_id": "cell-45de4813453d610f",
+     "locked": true,
+     "points": 5,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "'\\nAUTOGRADER CELL. DO NOT MODIFY THIS.\\n'"
+      ]
+     },
+     "execution_count": 95,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 96,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-10-22T17:53:28.882892Z",
+     "start_time": "2020-10-22T17:53:28.874255Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "169852fc05e3f83720c73a440ed03a3f",
+     "grade": true,
+     "grade_id": "cell-0c00e2f67834bd8d",
+     "locked": true,
+     "points": 10,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "'\\nAUTOGRADER CELL. DO NOT MODIFY THIS.\\n'"
+      ]
+     },
+     "execution_count": 96,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "05efd93926d5a95c2fa43480f4aefcd0",
+     "grade": false,
+     "grade_id": "cell-3b34f300dcde3d1b",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "### 3 Model Training [35 points]\n",
+    "\n",
+    "#### 3.1 Loss and Optimizer [5 points]"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 97,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-10-22T17:53:28.888321Z",
+     "start_time": "2020-10-22T17:53:28.884783Z"
+    },
+    "deletable": false
+   },
+   "outputs": [],
+   "source": [
+    "\"\"\"\n",
+    "TODO: Specify Binary Cross Entropy as the loss function (`nn.BCELoss`) and assign it to `criterion`.\n",
+    "      Spcify Adam as the optimizer (`torch.optim.Adam`)  with learning rate 0.001 and assign it to `optimizer`.\n",
+    "\"\"\"\n",
+    "\n",
+    "criterion = None\n",
+    "optimizer = None\n",
+    "\n",
+    "# your code here\n",
+    "# raise NotImplementedError\n",
+    "import torch.optim as optim\n",
+    "\n",
+    "criterion = nn.BCELoss()\n",
+    "optimizer = optim.Adam(naive_rnn.parameters(), lr=0.001)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 98,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-10-22T17:53:28.894457Z",
+     "start_time": "2020-10-22T17:53:28.890840Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "f642b0163a31499897a3b2a3e66657f6",
+     "grade": true,
+     "grade_id": "cell-40bee829e3b63b7d",
+     "locked": true,
+     "points": 5,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "'\\nAUTOGRADER CELL. DO NOT MODIFY THIS.\\n'"
+      ]
+     },
+     "execution_count": 98,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "aaaa2001d18c7fb4f269a75535f53677",
+     "grade": false,
+     "grade_id": "cell-873df7380d762445",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "#### 3.2 Evaluate [10 points]\n",
+    "\n",
+    "Then, let us implement the `eval_model()` function first."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 99,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-10-22T17:53:29.281635Z",
+     "start_time": "2020-10-22T17:53:28.901898Z"
+    },
+    "deletable": false
+   },
+   "outputs": [],
+   "source": [
+    "from sklearn.metrics import precision_recall_fscore_support, roc_auc_score\n",
+    "\n",
+    "\n",
+    "def eval_model(model, val_loader):\n",
+    "    \n",
+    "    \"\"\"\n",
+    "    TODO: evaluate the model.\n",
+    "    \n",
+    "    Arguments:\n",
+    "        model: the RNN model\n",
+    "        val_loader: validation dataloader\n",
+    "        \n",
+    "    Outputs:\n",
+    "        precision: overall precision score\n",
+    "        recall: overall recall score\n",
+    "        f1: overall f1 score\n",
+    "        roc_auc: overall roc_auc score\n",
+    "        \n",
+    "    Note that please pass all four arguments to the model so that we can use this function for both \n",
+    "    models. (Use `model(x, masks, rev_x, rev_masks)`.)\n",
+    "        \n",
+    "    HINT: checkout https://scikit-learn.org/stable/modules/classes.html#module-sklearn.metrics\n",
+    "    \"\"\"\n",
+    "    \n",
+    "    # your code here\n",
+    "    # raise NotImplementedError\n",
+    "    \n",
+    "    val_labels = []\n",
+    "    val_probs = []\n",
+    "    for step, batch in enumerate(val_loader):\n",
+    "        b_x, b_masks, b_rev_x, b_rev_masks, b_labels = batch\n",
+    "\n",
+    "        with torch.no_grad():\n",
+    "            \n",
+    "            b_probs = model(b_x, b_masks, b_rev_x, b_rev_masks)\n",
+    "            val_labels.extend(b_labels.detach().numpy().tolist())\n",
+    "            val_probs.extend(b_probs.detach().numpy().reshape(-1).tolist())\n",
+    "\n",
+    "    precision, recall, f1, _ = precision_recall_fscore_support(val_labels, np.array(val_probs)>0.5, average='binary')\n",
+    "    roc_auc = roc_auc_score(val_labels, val_probs)\n",
+    "    \n",
+    "    return precision, recall, f1, roc_auc"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 100,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-10-22T17:53:29.667833Z",
+     "start_time": "2020-10-22T17:53:29.284284Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "197e373f11419054f6005341d13867bb",
+     "grade": true,
+     "grade_id": "cell-764df4f66a8f01e4",
+     "locked": true,
+     "points": 10,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "\n",
+    "p, r, f, roc_auc = eval_model(naive_rnn, val_loader)\n",
+    "assert p.size == 1, \"Precision should be a scalar.\"\n",
+    "assert r.size == 1, \"Recall should be a scalar.\"\n",
+    "assert f.size == 1, \"F1 should be a scalar.\"\n",
+    "assert roc_auc.size == 1, \"ROC-AUC should be a scalar.\"\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "d028fa9ae9df03ebcd024c586205fd8f",
+     "grade": false,
+     "grade_id": "cell-9b3672b70944a8d9",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "#### 3.3 Training and evlauation [20 points]\n",
+    "\n",
+    "Now let us implement the `train()` function. Note that `train()` should call `eval_model()` at the end of each training epoch to see the results on the validaion dataset."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 101,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-10-22T17:53:55.590470Z",
+     "start_time": "2020-10-22T17:53:29.669509Z"
+    },
+    "deletable": false
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Epoch: 1 \t Training Loss: 0.566221\n",
+      "Epoch: 1 \t Validation f: 0.60, acc: 0.79\n",
+      "Epoch: 2 \t Training Loss: 0.449098\n",
+      "Epoch: 2 \t Validation f: 0.63, acc: 0.80\n",
+      "Epoch: 3 \t Training Loss: 0.351871\n",
+      "Epoch: 3 \t Validation f: 0.64, acc: 0.80\n",
+      "Epoch: 4 \t Training Loss: 0.247147\n",
+      "Epoch: 4 \t Validation f: 0.62, acc: 0.79\n",
+      "Epoch: 5 \t Training Loss: 0.147586\n",
+      "Epoch: 5 \t Validation f: 0.63, acc: 0.79\n"
+     ]
+    }
+   ],
+   "source": [
+    "def train(model, train_loader, val_loader, n_epochs):\n",
+    "    \"\"\"\n",
+    "    TODO: train the model.\n",
+    "    \n",
+    "    Arguments:\n",
+    "        model: the RNN model\n",
+    "        train_loader: training dataloder\n",
+    "        val_loader: validation dataloader\n",
+    "        n_epochs: total number of epochs\n",
+    "        \n",
+    "    You need to call `eval_model()` at the end of each training epoch to see how well the model performs \n",
+    "    on validation data.\n",
+    "        \n",
+    "    Note that please pass all four arguments to the model so that we can use this function for both \n",
+    "    models. (Use `model(x, masks, rev_x, rev_masks)`.)\n",
+    "    \"\"\"\n",
+    "    \n",
+    "    # your code here\n",
+    "    # raise NotImplementedError\n",
+    "    \n",
+    "    for epoch in range(n_epochs):\n",
+    "        train_loss = 0\n",
+    "        for x, masks, rev_x, rev_masks, labels in train_loader:\n",
+    "            # Forward pass\n",
+    "            outputs = model(x, masks, rev_x, rev_masks)\n",
+    "            loss = criterion(outputs, labels) \n",
+    "            # Backward pass\n",
+    "            optimizer.zero_grad()\n",
+    "            loss.backward()\n",
+    "            optimizer.step()\n",
+    "            train_loss += loss.item()\n",
+    "        train_loss = train_loss / len(train_loader)\n",
+    "        print('Epoch: {} \\t Training Loss: {:.6f}'.format(epoch+1, train_loss))\n",
+    "        p, r, f, roc_auc = eval_model(model, val_loader)\n",
+    "        print('Epoch: %d \\t Validation f: %.2f, acc: %.2f'%(epoch+1, f, roc_auc))\n",
+    "\n",
+    "    \n",
+    "# number of epochs to train the model\n",
+    "n_epochs = 5\n",
+    "train(naive_rnn, train_loader, val_loader, n_epochs)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 102,
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "b2ab4e44c6b1125682a2d8ca02030673",
+     "grade": true,
+     "grade_id": "cell-8fc0a72d1a31aa34",
+     "locked": true,
+     "points": 10,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "0.7857894736842107\n"
+     ]
+    }
+   ],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "p, r, f, roc_auc = eval_model(naive_rnn, val_loader)\n",
+    "print(roc_auc)\n",
+    "assert roc_auc > 0.7, \"ROC AUC is too low on the validation set (%f < 0.7)\"%(roc_auc)\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 103,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-10-22T17:53:55.960727Z",
+     "start_time": "2020-10-22T17:53:55.592059Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "0ed19dc555eb7ae8c97e038425457774",
+     "grade": true,
+     "grade_id": "cell-8e9d1d7cb1c3a386",
+     "locked": true,
+     "points": 10,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "'\\nAUTOGRADER CELL. DO NOT MODIFY THIS.\\n'"
+      ]
+     },
+     "execution_count": 103,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  }
+ ],
+ "metadata": {
+  "illinois_payload": {
+   "b64z": "",
+   "nb_path": "release/HW3_RNN/HW3_RNN.ipynb"
+  },
+  "kernelspec": {
+   "display_name": "Python 3 (Threads: 2)",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.8.8"
+  },
+  "toc": {
+   "base_numbering": 1,
+   "nav_menu": {},
+   "number_sections": false,
+   "sideBar": true,
+   "skip_h1_title": true,
+   "title_cell": "Table of Contents",
+   "title_sidebar": "Contents",
+   "toc_cell": false,
+   "toc_position": {
+    "height": "calc(100% - 180px)",
+    "left": "10px",
+    "top": "150px",
+    "width": "358.390625px"
+   },
+   "toc_section_display": true,
+   "toc_window_display": true
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 2
+}

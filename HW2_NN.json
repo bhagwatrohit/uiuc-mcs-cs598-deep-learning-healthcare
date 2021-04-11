@@ -1,0 +1,1945 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "7c510bcd16d66b0b0847f78d5ee784bb",
+     "grade": false,
+     "grade_id": "cell-e5edec0425de3a50",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "## Overview\n",
+    "\n",
+    "In this homework, you will get introduced to [PyTorch](https://pytorch.org), a framework for building and training neural networks. PyTorch in a lot of ways behaves like the arrays you love from Numpy. These Numpy arrays, after all, are just tensors. PyTorch takes these tensors and makes it simple to move them to GPUs for the faster processing needed when training neural networks. It also provides a module that automatically calculates gradients (for backpropagation) and another module specifically for building neural networks.\n",
+    "\n",
+    "More specifically, you will first train a simple neural network. Then, you will try some embeddings models on text data. Lastly, you will visualize the text embeddings."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "e0289a6c9f72f08e66d0b183e6364503",
+     "grade": false,
+     "grade_id": "cell-25ebf45813d4a47b",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "---"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 139,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2021-02-01T17:13:38.595127Z",
+     "start_time": "2021-02-01T17:13:38.592201Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "b89e41d1d5fb9cc7a2eaa6f5894224f1",
+     "grade": false,
+     "grade_id": "cell-4c4fd1b10bb8a9d5",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "import os\n",
+    "import sys\n",
+    "\n",
+    "DATA_PATH = \"../HW2_NN-lib/data/\"\n",
+    "\n",
+    "assert os.path.isdir(DATA_PATH)\n",
+    "sys.path.append('../HW2_NN-lib')"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "4369d4c7200df5775fc38f1c08de0bce",
+     "grade": false,
+     "grade_id": "cell-ad33073e8b0cba4e",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "---"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "653fb83524ea30306bacd7f69f21da60",
+     "grade": false,
+     "grade_id": "cell-1231df61d1b05217",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "## 1 Neural Network [100 points]\n",
+    "\n",
+    "In this section, you will train a neural network to perform Mortality Prediction. The data is the same as HW1. We have processed the data for you. The data is saved in SVMLight format under `DATA_PATH`."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 140,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2021-02-01T17:13:38.724421Z",
+     "start_time": "2021-02-01T17:13:38.601872Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "a28a89466a843e1ea9e321209ffa4639",
+     "grade": false,
+     "grade_id": "cell-500f59fa8928300d",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "features_svmlight.train  features_svmlight.validate\r\n"
+     ]
+    }
+   ],
+   "source": [
+    "!ls {DATA_PATH}"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 141,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2021-02-01T17:13:39.038690Z",
+     "start_time": "2021-02-01T17:13:38.726403Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "adf864537cfcc84930027a7738dd294d",
+     "grade": false,
+     "grade_id": "cell-524b54d72547e9f6",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "import random\n",
+    "import numpy as np\n",
+    "import torch\n",
+    "import torch.nn as nn"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 142,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2021-02-01T17:13:39.044816Z",
+     "start_time": "2021-02-01T17:13:39.040527Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "52f378a7ba44534454421fc75705fa9e",
+     "grade": false,
+     "grade_id": "cell-d667dcc941d1fd95",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "# set seed\n",
+    "seed = 24\n",
+    "random.seed(seed)\n",
+    "np.random.seed(seed)\n",
+    "torch.manual_seed(seed)\n",
+    "os.environ[\"PYTHONHASHSEED\"] = str(seed)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "29fc5338ff19775bc606b7c674958ba1",
+     "grade": false,
+     "grade_id": "cell-8054cfec9ea92f79",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "### 1.1 PyTorch Basics [30 points]\n",
+    "\n",
+    "It turns out neural network computations are just a bunch of linear algebra operations on tensors, a generalization of matrices. A vector is a 1-dimensional tensor, a matrix is a 2-dimensional tensor, an array with three indices is a 3-dimensional tensor (RGB color images for example). The fundamental data structure for neural networks are tensors and PyTorch (as well as pretty much every other deep learning framework) is built around tensors."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "d95884e1631a91ec59513716c9aa8b8f",
+     "grade": false,
+     "grade_id": "cell-67c8798540ddc767",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "With the basics covered, it is time to explore how we can use PyTorch to build a simple neural network."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 143,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2021-02-01T17:13:39.049063Z",
+     "start_time": "2021-02-01T17:13:39.046424Z"
+    },
+    "deletable": false
+   },
+   "outputs": [],
+   "source": [
+    "#input\n",
+    "# x: torch.Tensor\n",
+    "#output\n",
+    "# relu(x): torch.Tensor\n",
+    "def relu(x):\n",
+    "\n",
+    "    \"\"\" \n",
+    "    TODO: Implement a ReLU activation function from **scratch**.\n",
+    "    \n",
+    "    REFERENCE: https://pytorch.org/docs/stable/generated/torch.nn.ReLU.html#torch.nn.ReLU\n",
+    "    \"\"\"\n",
+    "    x[x<=0] = 0\n",
+    "    \n",
+    "    return x\n",
+    "    # your code here\n",
+    "    # raise NotImplementedError"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 144,
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "a3066760fab0851eea7e349f3bb3b007",
+     "grade": false,
+     "grade_id": "cell-6549ed49fd94ebeb",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "\n",
+    "# test if `activation` directly calls `torch.relu`\n",
+    "random_tensor = torch.randn((2, 2))\n",
+    "_relu = torch.relu\n",
+    "del torch.relu\n",
+    "try:\n",
+    "    relu(random_tensor)\n",
+    "    torch.relu = _relu\n",
+    "except:\n",
+    "    print(\"`relu` not implemented from scratch!\")\n",
+    "    torch.relu = _relu\n",
+    "    raise\n",
+    "\n",
+    "# test on some random input\n",
+    "random_tensor = torch.randn((1, 1))[0][0]\n",
+    "assert torch.allclose(relu(random_tensor), torch.relu(random_tensor)), \"relu() is wrong for {}!\".format(random_tensor)\n",
+    "random_tensor = torch.randn((1, 1))[0][0]\n",
+    "assert torch.allclose(relu(random_tensor), torch.relu(random_tensor)), \"relu() is wrong for {}!\".format(random_tensor)\n",
+    "random_tensor = torch.randn((2, 2))\n",
+    "assert torch.allclose(relu(random_tensor), torch.relu(random_tensor)), \"relu() is wrong!\""
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 145,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2021-02-01T17:13:39.057729Z",
+     "start_time": "2021-02-01T17:13:39.052277Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "f6fd77ba907a166b4821727fa82f7c5f",
+     "grade": true,
+     "grade_id": "cell-4899117c7f091884",
+     "locked": true,
+     "points": 10,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "'\\nAUTOGRADER CELL. DO NOT MODIFY THIS.\\n'"
+      ]
+     },
+     "execution_count": 145,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 146,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2021-02-01T17:13:39.062476Z",
+     "start_time": "2021-02-01T17:13:39.060040Z"
+    },
+    "deletable": false
+   },
+   "outputs": [],
+   "source": [
+    "#input\n",
+    "# x: torch.Tensor\n",
+    "#output\n",
+    "# sigmoid(x): torch.Tensor\n",
+    "def sigmoid(x):\n",
+    "\n",
+    "    \"\"\" \n",
+    "    TODO: Implement a Sigmoid activation function from **scratch**.\n",
+    "    HINT: Consider `torch.exp()`.\n",
+    "    \"\"\"\n",
+    "    x = 1 / (1 + torch.exp(-x))     \n",
+    "    return x\n",
+    "    # your code here\n",
+    "    # raise NotImplementedError"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 147,
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "edae1c7ff3fd4610832c56ae49e7f47a",
+     "grade": false,
+     "grade_id": "cell-34164c480f56b751",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "\n",
+    "# test if `activation` directly calls `torch.sigmoid`\n",
+    "random_tensor = torch.randn((2, 2))\n",
+    "_sigmoid = torch.sigmoid\n",
+    "del torch.sigmoid\n",
+    "try:\n",
+    "    sigmoid(random_tensor)\n",
+    "    torch.sigmoid = _sigmoid\n",
+    "except:\n",
+    "    print(\"`activation` not implemented from scratch!\")\n",
+    "    torch.sigmoid = _sigmoid\n",
+    "    raise\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 148,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2021-02-01T17:13:39.070494Z",
+     "start_time": "2021-02-01T17:13:39.064382Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "331aba0b072683634b54c4491cec9c9b",
+     "grade": true,
+     "grade_id": "cell-a809913ba97340a1",
+     "locked": true,
+     "points": 10,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "'\\nAUTOGRADER CELL. DO NOT MODIFY THIS.\\n'"
+      ]
+     },
+     "execution_count": 148,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "ea09e315a0256dec37b69a5de4d30332",
+     "grade": false,
+     "grade_id": "cell-b70799c84c68e235",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "Now, let us try to use the `sigmoid` function to calculate the output for a simple single layer network."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 149,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2021-02-01T17:13:39.075024Z",
+     "start_time": "2021-02-01T17:13:39.072181Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "848559092ba0b9cd49c0a4d764a226ec",
+     "grade": false,
+     "grade_id": "cell-1c4dbba6ce4e73c2",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "# Generate some data\n",
+    "# Features are 5 random normal variables\n",
+    "features = torch.randn((1, 5))\n",
+    "# weights for our data, random normal variables again\n",
+    "weights = torch.randn_like(features)\n",
+    "# and a bias term\n",
+    "bias = torch.randn((1, 1))"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "8440730c760134eb76c1d10060c48639",
+     "grade": false,
+     "grade_id": "cell-b7c7ccfb388ff41d",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "Above I generated data we can use to get the output of our simple network. This is all just random for now, going forward we will start using normal data.\n",
+    "\n",
+    "`features = torch.randn((1, 5))` creates a tensor with shape (1, 5), one row and five columns, that contains values randomly distributed according to the normal distribution with a mean of zero and standard deviation of one.\n",
+    "\n",
+    "`weights = torch.randn_like(features)` creates another tensor with the same shape as features, again containing values from a normal distribution.\n",
+    "\n",
+    "`bias = torch.randn((1, 1))` creates a single value from a normal distribution."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "3f274293ccb462e469423c2d8babdcd2",
+     "grade": false,
+     "grade_id": "cell-8ed7cb89673d4a01",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "Use the generated data to calculate the output of this simple single layer network. Input features are `features`, weights are `weights`, and bias are `bias`. Use `sigmoid` as the activation function."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 150,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2021-02-01T17:13:39.079616Z",
+     "start_time": "2021-02-01T17:13:39.076874Z"
+    },
+    "deletable": false
+   },
+   "outputs": [],
+   "source": [
+    "#input\n",
+    "# features: torch.Tensor\n",
+    "# weights: torch.Tensor\n",
+    "# bias: torch.Tensor\n",
+    "#output\n",
+    "# output of a sinlge layer network: torch.Tensor\n",
+    "def single_layer_network(features, weights, bias):\n",
+    "\n",
+    "    \"\"\" \n",
+    "    TODO: Calculate the output of this simple single layer network.\n",
+    "    HINT: Consider `torch.mm()` or `torch.matmul()`.\n",
+    "    \"\"\"\n",
+    "    \n",
+    "    z = torch.matmul(weights, features.T) + bias\n",
+    "    \n",
+    "    output = sigmoid(z)\n",
+    "    return output \n",
+    "    # your code here\n",
+    "    # raise NotImplementedError"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 151,
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "04d35a84b7799eb06cee191cd11d0816",
+     "grade": false,
+     "grade_id": "cell-bf89e0af45d153ac",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "\n",
+    "# test if function `single_layer_network` calls function `sigmoid`\n",
+    "orig_sigmoid = sigmoid\n",
+    "del sigmoid\n",
+    "try: \n",
+    "    single_layer_network(features, weights, bias)\n",
+    "except NameError: \n",
+    "    sigmoid = orig_sigmoid\n",
+    "    pass\n",
+    "else:\n",
+    "    print('Function `sigmoid` is not used!')\n",
+    "    sigmoid = orig_sigmoid\n",
+    "    raise\n",
+    "\n",
+    "# test on some random input\n",
+    "features = torch.Tensor([[0.1, 0.2, 0.3]])\n",
+    "weights = torch.Tensor([[0.1, 0.2, 0.3]])\n",
+    "bias = torch.Tensor([0])\n",
+    "assert torch.allclose(single_layer_network(features, weights, bias), torch.Tensor([[0.5349]]), atol=1e-4), \"single_layer_network() is wrong!\"\n",
+    "features = torch.Tensor([[1, 0, 0]])\n",
+    "weights = torch.Tensor([[4, 0, 0]])\n",
+    "bias = torch.Tensor([-1])\n",
+    "assert torch.allclose(single_layer_network(features, weights, bias), torch.Tensor([[0.9526]]), atol=1e-4), \"single_layer_network() is wrong!\"\n",
+    "features = torch.Tensor([[0.1, 0.2, 0.3]])\n",
+    "weights = torch.Tensor([[0.1, 0.2, 0.3]])\n",
+    "bias = torch.Tensor([-0.5])\n",
+    "assert torch.allclose(single_layer_network(features, weights, bias), torch.Tensor([[0.4110]]), atol=1e-4), \"single_layer_network() is wrong!\""
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 152,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2021-02-01T17:13:39.088208Z",
+     "start_time": "2021-02-01T17:13:39.081267Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "29f2a640c6602df474b6eaaadd9ec03d",
+     "grade": true,
+     "grade_id": "cell-6891b7e468210e20",
+     "locked": true,
+     "points": 10,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "'\\nAUTOGRADER CELL. DO NOT MODIFY THIS.\\n'"
+      ]
+     },
+     "execution_count": 152,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "873009cf15061fea70a71fcaa23f7967",
+     "grade": false,
+     "grade_id": "cell-f9e5a8eb5a8144e0",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "That is how you can calculate the output for a sinlge layer. The real power of this algorithm happens when you start stacking these individual units into layers and stacks of layers, into a network of neurons. The output of one layer of neurons becomes the input for the next layer. We will explore this in the next problem."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "e443f40e1500a73bacb40ca5c409adba",
+     "grade": false,
+     "grade_id": "cell-1a752502371d0365",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "### 1.2 NN with PyTorch [70 points]\n",
+    "\n",
+    "Deep learning networks tend to be massive with dozens or hundreds of layers, that is where the term \"deep\" comes from. You can build one of these deep networks using only weight matrices as we did in the previous problem, but in general it is very cumbersome and difficult to implement. PyTorch has a nice module `nn` that provides a nice way to efficiently build large neural networks.\n",
+    "\n",
+    "Previously, you have tried to perform Mortality Prediction using traditional machine learning methods such as logistic regression, support vector machine, and decision tree. In this problem, you will train a neural network to perform Mortality Prediction. The data is the same as HW1. We have processed the data for you. The data is saved in SVMLight format under `DATA_PATH`."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "89388def62c47e58bcc36899bab6d14e",
+     "grade": false,
+     "grade_id": "cell-6a891fabac07cd53",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "#### 1.2.1 Load the Data\n",
+    "\n",
+    "This part has been done for you."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 153,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2021-02-01T17:13:39.764786Z",
+     "start_time": "2021-02-01T17:13:39.089984Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "eb852237844f138e79773a6e6218f8f6",
+     "grade": false,
+     "grade_id": "cell-12381cfa8e310e4e",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "X_train shape: torch.Size([836, 3190])\n",
+      "Y_train shape: torch.Size([836])\n",
+      "X_val shape: torch.Size([210, 3190])\n",
+      "Y_val shape: torch.Size([210])\n"
+     ]
+    }
+   ],
+   "source": [
+    "import utils\n",
+    "\n",
+    "\n",
+    "\"\"\" load SVMLight data \"\"\"\n",
+    "# training data\n",
+    "X_train, Y_train = utils.get_data_from_svmlight(DATA_PATH + \"features_svmlight.train\")\n",
+    "# validation data\n",
+    "X_val, Y_val = utils.get_data_from_svmlight(DATA_PATH + \"features_svmlight.validate\")\n",
+    "\n",
+    "\"\"\" convert to torch.tensor \"\"\"\n",
+    "X_train = torch.from_numpy(X_train.toarray()).type(torch.float)\n",
+    "Y_train = torch.from_numpy(Y_train).type(torch.float)\n",
+    "X_val = torch.from_numpy(X_val.toarray()).type(torch.float)\n",
+    "Y_val = torch.from_numpy(Y_val).type(torch.float)\n",
+    "\n",
+    "print(\"X_train shape:\", X_train.shape)\n",
+    "print(\"Y_train shape:\", Y_train.shape)\n",
+    "print(\"X_val shape:\", X_val.shape)\n",
+    "print(\"Y_val shape:\", Y_val.shape)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "8e57f591704b5a0b400ed8e90538f8a4",
+     "grade": false,
+     "grade_id": "cell-5d36ed8f11eb5bef",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "Now, we will create a `TensorDataset` to wrap those tensors. (https://pytorch.org/docs/stable/data.html#torch.utils.data.TensorDataset)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 154,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2021-02-01T17:13:39.770020Z",
+     "start_time": "2021-02-01T17:13:39.767021Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "64995e943db0c1a1c2871ffb518d4995",
+     "grade": false,
+     "grade_id": "cell-1a5652f7d706caeb",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Size of train_dataset: 836\n",
+      "Size of val_dataset: 210\n",
+      "(tensor([0., 0., 0.,  ..., 0., 0., 0.]), tensor(1.))\n",
+      "[torch.Size([3190]), torch.Size([])]\n"
+     ]
+    }
+   ],
+   "source": [
+    "from torch.utils.data import TensorDataset\n",
+    "\n",
+    "train_dataset = TensorDataset(X_train, Y_train)\n",
+    "val_dataset = TensorDataset(X_val, Y_val)\n",
+    "\n",
+    "print(\"Size of train_dataset:\", len(train_dataset))\n",
+    "print(\"Size of val_dataset:\", len(val_dataset))\n",
+    "\n",
+    "#If you index train_dataset now, you will get a (data, label) tuple\n",
+    "print(train_dataset[0])\n",
+    "print([_t.shape for _t in train_dataset[0]])"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "ce6ae06592219bb3adeb4000015d04aa",
+     "grade": false,
+     "grade_id": "cell-a20101e2c2f1354e",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "Next, we will load the dataset into a dataloader so that we can we can use it to loop through the dataset for training and validating. (https://pytorch.org/docs/stable/data.html#torch.utils.data.DataLoader)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 155,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2021-02-01T17:13:39.774519Z",
+     "start_time": "2021-02-01T17:13:39.771412Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "b558cb0adf5080ca96656b72f01bdc95",
+     "grade": false,
+     "grade_id": "cell-d72980d7a1108c0c",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "# of train batches: 27\n",
+      "# of val batchse: 7\n"
+     ]
+    }
+   ],
+   "source": [
+    "from torch.utils.data import DataLoader\n",
+    "\n",
+    "# how many samples per batch to load\n",
+    "batch_size = 32\n",
+    "\n",
+    "# prepare dataloaders\n",
+    "train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)\n",
+    "val_loader = DataLoader(val_dataset, batch_size=batch_size)\n",
+    "\n",
+    "print(\"# of train batches:\", len(train_loader))\n",
+    "print(\"# of val batchse:\", len(val_loader))"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "709db419971245ac3b4607df98bc709d",
+     "grade": false,
+     "grade_id": "cell-9c13efef4d9f91cd",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "You will notice that the data loader is created with a batch size of $32$, and `shuffle=True`. \n",
+    "\n",
+    "The batch size is the number of images we get in one iteration from the data loader and pass through our network, often called a batch. \n",
+    "\n",
+    "And `shuffle=True` tells it to shuffle the dataset every time we start going through the data loader again."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 156,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2021-02-01T17:13:39.779351Z",
+     "start_time": "2021-02-01T17:13:39.775973Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "6590b8e4cd19d7f0cb21d41c582bcda6",
+     "grade": false,
+     "grade_id": "cell-26cbb325759506a2",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Shape of a batch x: torch.Size([32, 3190])\n",
+      "Shape of a batch y: torch.Size([32])\n"
+     ]
+    }
+   ],
+   "source": [
+    "train_iter = iter(train_loader)\n",
+    "x, y = next(train_iter)\n",
+    "\n",
+    "print('Shape of a batch x:', x.shape)\n",
+    "print('Shape of a batch y:', y.shape)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "4c19d021ce13a35824b3755b03770683",
+     "grade": false,
+     "grade_id": "cell-e4408f69961f6cb5",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "#### 1.2.2 Build the Model [30 points]\n",
+    "\n",
+    "Now, let us build a real NN model. For each patient, the NN model will take an input tensor of 3190-dim, and produce an output tensor of 1-dim (0 for non-mortality, 1 for moratality). The detailed model architecture is shown in the table below.\n",
+    "\n",
+    "Layers | Configuration | Activation Function | Output Dimension (batch, feature)\n",
+    "--- | --- | --- | ---\n",
+    "fully connected | input size 3190, output size 64 | ReLU | (32, 64)\n",
+    "fully connected | input size 64, output size 32 | ReLU | (32, 32)\n",
+    "dropout | probability 0.5 | - | (32, 32)\n",
+    "fully connected | input size 32, output size 1 | Sigmoid | (32, 1)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 157,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2021-02-01T17:13:39.787943Z",
+     "start_time": "2021-02-01T17:13:39.780863Z"
+    },
+    "deletable": false
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Net(\n",
+      "  (fc1): Linear(in_features=3190, out_features=64, bias=True)\n",
+      "  (fc2): Linear(in_features=64, out_features=32, bias=True)\n",
+      "  (dropout): Dropout(p=0.5, inplace=False)\n",
+      "  (fc3): Linear(in_features=32, out_features=1, bias=True)\n",
+      ")\n"
+     ]
+    }
+   ],
+   "source": [
+    "\"\"\"\n",
+    "TODO: Build the MLP shown above.\n",
+    "HINT: Consider using `nn.Linear`, `nn.Dropout`, `torch.relu`, `torch.sigmoid`.\n",
+    "\"\"\"\n",
+    "import torch.nn.functional as F\n",
+    "\n",
+    "class Net(nn.Module):\n",
+    "    def __init__(self):\n",
+    "        super(Net, self).__init__()\n",
+    "        \n",
+    "        # DO NOT change the names\n",
+    "        self.fc1 = nn.Linear(3190,64)\n",
+    "        self.fc2 = nn.Linear(64,32)\n",
+    "        self.dropout = nn.Dropout(p=0.5)\n",
+    "        self.fc3 = nn.Linear(32,1)\n",
+    "        \n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "\n",
+    "    def forward(self, x):\n",
+    "        # your code here\n",
+    "        x = F.relu(self.fc1(x))\n",
+    "        x = F.relu(self.fc2(x))\n",
+    "        x = self.dropout(x)\n",
+    "        x = F.sigmoid(self.fc3(x))\n",
+    "        # raise NotImplementedError\n",
+    "        return x\n",
+    "\n",
+    "# initialize the NN\n",
+    "model = Net()\n",
+    "print(model)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 158,
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "4816e21a61aae8e0066ae9e66562ab5f",
+     "grade": false,
+     "grade_id": "cell-f76f90197c77b3df",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "\n",
+    "assert model.fc1.in_features == 3190, f'Input layer input size is wrong! Should be 3190!={model.fc1.in_features}'\n",
+    "assert model.fc1.out_features == 64, f'First layer output size is wrong! Should be 64!={model.fc1.out_features}'\n",
+    "assert model.fc2.in_features == 64, f'Second layer input size is wrong! Should be 64!={model.fc2.in_features}'\n",
+    "assert model.fc2.out_features == 32, f'Second layer output size is wrong! Should be 32!={model.fc2.out_features}'\n",
+    "assert model.fc3.in_features == 32, f'Third layer input size is wrong! Should be 32!={model.fc3.in_features}'\n",
+    "assert model.fc3.out_features == 1, f'Final output size is wrong! Should be 1!={model.fc3.out_features}'"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 159,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2021-02-01T17:13:39.798595Z",
+     "start_time": "2021-02-01T17:13:39.792387Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "d7bd30bf3da37fe10b9b3b210e3d8722",
+     "grade": true,
+     "grade_id": "cell-2856eacbec25c451",
+     "locked": true,
+     "points": 20,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "'\\nAUTOGRADER CELL. DO NOT MODIFY THIS.\\n'"
+      ]
+     },
+     "execution_count": 159,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 160,
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "4aac903001232c3904af7887dcd708ef",
+     "grade": true,
+     "grade_id": "cell-4eb5d8c51ab28194",
+     "locked": true,
+     "points": 10,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "'\\nAUTOGRADER CELL. DO NOT MODIFY THIS.\\n'"
+      ]
+     },
+     "execution_count": 160,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "e4df3188b137ec63c7201442a5fcb0dc",
+     "grade": false,
+     "grade_id": "cell-5a70a161a6fa7e7e",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "Now that we have a network, let's see what happens when we pass in an image."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 161,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2021-02-01T17:13:39.806646Z",
+     "start_time": "2021-02-01T17:13:39.802136Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "36986762a10a295f5fea3c6a6930dd8f",
+     "grade": false,
+     "grade_id": "cell-ef5884df24944fc0",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Input x shape: torch.Size([32, 3190])\n",
+      "Output shape:  torch.Size([32, 1])\n"
+     ]
+    }
+   ],
+   "source": [
+    "# Grab some data \n",
+    "train_iter = iter(train_loader)\n",
+    "x, y = next(train_iter)\n",
+    "\n",
+    "# Forward pass through the network\n",
+    "output = model.forward(x)\n",
+    "\n",
+    "print('Input x shape:', x.shape)\n",
+    "print('Output shape: ', output.shape)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "6de2bded7dc375dd1523aefd7d731aa4",
+     "grade": false,
+     "grade_id": "cell-4994c16a476d76b7",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "#### 1.2.3 Train the Network [40 points]\n",
+    "\n",
+    "In this step, you will train the NN model. \n",
+    "\n",
+    "Neural networks with non-linear activations work like universal function approximators. There is some function that maps your input to the output. The power of neural networks is that we can train them to approximate this function, and basically any function given enough data and compute time."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 162,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2021-02-01T17:13:39.812991Z",
+     "start_time": "2021-02-01T17:13:39.808573Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "93edc58459930399b1c8cedd9477aa09",
+     "grade": false,
+     "grade_id": "cell-d8ff55b4a3eac555",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "model = Net()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "6af00b0c68809d6317010cd9f3889923",
+     "grade": false,
+     "grade_id": "cell-4f20a0da1ae4d342",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "Losses in PyTorch.\n",
+    "\n",
+    "Let us start by seeing how we calculate the loss with PyTorch. Through the `nn.module`, PyTorch provides losses such as the binary cross-entropy loss (`nn.BCELoss`). You will usually see the loss assigned to `criterion`. \n",
+    "\n",
+    "As noted in the last part, with a classification problem such as Mortality Prediction, we are using the Sigmoid function to predict mortality probability. With a Sigmoid output, you want to use binary cross-entropy as the loss. To actually calculate the loss, you first define the criterion then pass in the output of your network and the correct labels."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 163,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2021-02-01T17:13:39.817573Z",
+     "start_time": "2021-02-01T17:13:39.814869Z"
+    },
+    "deletable": false
+   },
+   "outputs": [],
+   "source": [
+    "\"\"\"\n",
+    "TODO: Define the loss (BCELoss), assign it to `criterion`.\n",
+    "\n",
+    "REFERENCE: https://pytorch.org/docs/stable/generated/torch.nn.BCELoss.html#torch.nn.BCELoss\n",
+    "\"\"\"\n",
+    "\n",
+    "criterion = nn.BCELoss()\n",
+    "\n",
+    "# your code here\n",
+    "# raise NotImplementedError"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 164,
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "d0b8144d8936930fb61d528e78ee7183",
+     "grade": false,
+     "grade_id": "cell-1a0dae49f26b3ae1",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "_loss = criterion(torch.Tensor([0.1, 0.2, 0.9]), torch.Tensor([0., 1., 0.]))\n",
+    "assert abs(_loss.tolist() - 1.3391) < 1e-3, \"BCELoss is wrong\""
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 165,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2021-02-01T17:13:39.821575Z",
+     "start_time": "2021-02-01T17:13:39.819288Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "756afb856e97788183db8efb8ccc2175",
+     "grade": true,
+     "grade_id": "cell-657d74b9707831fe",
+     "locked": true,
+     "points": 10,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "'\\nAUTOGRADER CELL. DO NOT MODIFY THIS.\\n'"
+      ]
+     },
+     "execution_count": 165,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "fd1df923bbfd519f0d7cfb14c7f1a9e7",
+     "grade": false,
+     "grade_id": "cell-a288a935651be8ee",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "Optimizer in PyTorch.\n",
+    "\n",
+    "Optimizer can update the weights with the gradients. We can get these from PyTorch's `optim` package. For example we can use stochastic gradient descent with `optim.SGD`."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 166,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2021-02-01T17:13:39.825889Z",
+     "start_time": "2021-02-01T17:13:39.823384Z"
+    },
+    "deletable": false
+   },
+   "outputs": [],
+   "source": [
+    "\"\"\"\n",
+    "TODO: Define the optimizer (SGD) with learning rate 0.01, assign it to `optimizer`.\n",
+    "\n",
+    "REFERENCE: https://pytorch.org/docs/stable/optim.html\n",
+    "\"\"\"\n",
+    "\n",
+    "optimizer = torch.optim.SGD(model.parameters(), lr=0.01)\n",
+    "\n",
+    "# your code here\n",
+    "# raise NotImplementedError"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 167,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2021-02-01T17:13:39.830742Z",
+     "start_time": "2021-02-01T17:13:39.827771Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "050c2435472649a56a310b8f1d94f763",
+     "grade": true,
+     "grade_id": "cell-5d7a20ac55509d77",
+     "locked": true,
+     "points": 10,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "'\\nAUTOGRADER CELL. DO NOT MODIFY THIS.\\n'"
+      ]
+     },
+     "execution_count": 167,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "cadcbbe0c31ea90ec52c054e772ca204",
+     "grade": false,
+     "grade_id": "cell-5b88cc469821dbe6",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "Now let us train the NN model we previously created.\n",
+    "\n",
+    "First, let us implement the `evaluate` function that will be called to evaluate the model performance when training."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 168,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2021-02-01T17:13:39.851266Z",
+     "start_time": "2021-02-01T17:13:39.832903Z"
+    },
+    "deletable": false
+   },
+   "outputs": [],
+   "source": [
+    "from sklearn.metrics import *\n",
+    "\n",
+    "#input: Y_pred,Y_true\n",
+    "#output: accuracy, auc, precision, recall, f1-score\n",
+    "def classification_metrics(Y_pred, Y_true):\n",
+    "    acc, auc, precision, recall, f1score = accuracy_score(Y_true, Y_pred), \\\n",
+    "                                           roc_auc_score(Y_true, Y_pred), \\\n",
+    "                                           precision_score(Y_true, Y_pred), \\\n",
+    "                                           recall_score(Y_true, Y_pred), \\\n",
+    "                                           f1_score(Y_true, Y_pred)\n",
+    "    return acc, auc, precision, recall, f1score\n",
+    "\n",
+    "\n",
+    "#input: model, loader\n",
+    "def evaluate(model, loader):\n",
+    "    model.eval()\n",
+    "    all_y_true = torch.LongTensor()\n",
+    "    all_y_pred = torch.LongTensor()\n",
+    "    for x, y in loader:\n",
+    "        y_hat = model(x)\n",
+    "        # convert shape from [batch size, 1] to [batch size]\n",
+    "        y_hat = y_hat.view(y_hat.shape[0])\n",
+    "        \"\"\"\n",
+    "        TODO: obtain the predicted class (0, 1) by comparing y_hat against 0.5,\n",
+    "        assign the predicted class to y_pred.\n",
+    "        \"\"\"\n",
+    "        y_pred = y_hat>0.5\n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        all_y_true = torch.cat((all_y_true, y.to('cpu').long()), dim=0)\n",
+    "        all_y_pred = torch.cat((all_y_pred,  y_pred.to('cpu').long()), dim=0)\n",
+    "        \n",
+    "    acc, auc, precision, recall, f1 = classification_metrics(all_y_pred, all_y_true)\n",
+    "    print(f\"acc: {acc:.3f}, auc: {auc:.3f}, precision: {precision:.3f}, recall: {recall:.3f}, f1: {f1:.3f}\")\n",
+    "    return acc"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 169,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2021-02-01T17:13:39.892349Z",
+     "start_time": "2021-02-01T17:13:39.852886Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "883856b56318c5b880f08c45845cdbae",
+     "grade": false,
+     "grade_id": "cell-8970a0bdbd7b14bb",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "model perfomance before training:\n",
+      "acc: 0.402, auc: 0.500, precision: 0.402, recall: 1.000, f1: 0.573\n",
+      "acc: 0.429, auc: 0.500, precision: 0.429, recall: 1.000, f1: 0.600\n"
+     ]
+    }
+   ],
+   "source": [
+    "print(\"model perfomance before training:\")\n",
+    "# initialized the model\n",
+    "# model = Net()\n",
+    "acc_train_init = evaluate(model, train_loader)\n",
+    "acc_val_init = evaluate(model, val_loader)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 170,
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "51498ebc61895eae374cd8764e1c97a1",
+     "grade": false,
+     "grade_id": "cell-fa0511ee9c0bbe4b",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "assert acc_train_init < 0.7, \"accuracy is greater than 0.70! Please check this is random initialization and no training. So, accuracy sould be lower\""
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "fa3ece03d4d5ae38061656c973c68b2d",
+     "grade": false,
+     "grade_id": "cell-3f7737daea843131",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "To train the model, you should follow the following step:\n",
+    "- Clear the gradients of all optimized variables\n",
+    "- Forward pass: compute predicted outputs by passing inputs to the model\n",
+    "- Calculate the loss\n",
+    "- Backward pass: compute gradient of the loss with respect to model parameters\n",
+    "- Perform a single optimization step (parameter update)\n",
+    "- Update average training loss"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 171,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2021-02-01T17:13:50.984253Z",
+     "start_time": "2021-02-01T17:13:39.894069Z"
+    },
+    "deletable": false
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Epoch: 1 \tTraining Loss: 0.710522\n",
+      "acc: 0.429, auc: 0.500, precision: 0.429, recall: 1.000, f1: 0.600\n",
+      "Epoch: 21 \tTraining Loss: 0.668074\n",
+      "acc: 0.571, auc: 0.500, precision: 0.000, recall: 0.000, f1: 0.000\n",
+      "Epoch: 41 \tTraining Loss: 0.669629\n",
+      "acc: 0.571, auc: 0.500, precision: 0.000, recall: 0.000, f1: 0.000\n",
+      "Epoch: 61 \tTraining Loss: 0.640083\n",
+      "acc: 0.571, auc: 0.500, precision: 0.000, recall: 0.000, f1: 0.000\n",
+      "Epoch: 81 \tTraining Loss: 0.572785\n",
+      "acc: 0.600, auc: 0.542, precision: 0.667, recall: 0.133, f1: 0.222\n",
+      "Epoch: 101 \tTraining Loss: 0.496290\n",
+      "acc: 0.700, auc: 0.675, precision: 0.714, recall: 0.500, f1: 0.588\n",
+      "Epoch: 121 \tTraining Loss: 0.407389\n",
+      "acc: 0.724, auc: 0.708, precision: 0.711, recall: 0.600, f1: 0.651\n",
+      "Epoch: 141 \tTraining Loss: 0.325626\n",
+      "acc: 0.757, auc: 0.754, precision: 0.710, recall: 0.733, f1: 0.721\n",
+      "Epoch: 161 \tTraining Loss: 0.241748\n",
+      "acc: 0.762, auc: 0.757, precision: 0.722, recall: 0.722, f1: 0.722\n",
+      "Epoch: 181 \tTraining Loss: 0.184368\n",
+      "acc: 0.743, auc: 0.746, precision: 0.676, recall: 0.767, f1: 0.719\n",
+      "Epoch: 201 \tTraining Loss: 0.135256\n",
+      "acc: 0.743, auc: 0.746, precision: 0.676, recall: 0.767, f1: 0.719\n",
+      "Epoch: 221 \tTraining Loss: 0.105159\n",
+      "acc: 0.743, auc: 0.746, precision: 0.676, recall: 0.767, f1: 0.719\n",
+      "Epoch: 241 \tTraining Loss: 0.077705\n",
+      "acc: 0.752, auc: 0.756, precision: 0.686, recall: 0.778, f1: 0.729\n",
+      "Epoch: 261 \tTraining Loss: 0.063750\n",
+      "acc: 0.748, auc: 0.751, precision: 0.680, recall: 0.778, f1: 0.725\n",
+      "Epoch: 281 \tTraining Loss: 0.055278\n",
+      "acc: 0.748, auc: 0.751, precision: 0.680, recall: 0.778, f1: 0.725\n"
+     ]
+    }
+   ],
+   "source": [
+    "#import warnings\n",
+    "#warnings.filterwarnings('ignore')\n",
+    "\n",
+    "# number of epochs to train the model\n",
+    "# feel free to change this (just make sure that Coursera does not timeout)\n",
+    "n_epochs = 300\n",
+    "\n",
+    "# prep model for training\n",
+    "model.train()\n",
+    "\n",
+    "train_loss_arr = []\n",
+    "for epoch in range(n_epochs):\n",
+    "    \n",
+    "    train_loss = 0\n",
+    "    for x, y in train_loader:\n",
+    "        \"\"\" Step 1. clear gradients \"\"\"\n",
+    "        optimizer.zero_grad()\n",
+    "        \"\"\" \n",
+    "        TODO: Step 2. perform forward pass using `model`, save the output to y_hat;\n",
+    "              Step 3. calculate the loss using `criterion`, save the output to loss.\n",
+    "        \"\"\"\n",
+    "        y_hat = model(x)\n",
+    "        loss = criterion(y_hat, y)\n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        \"\"\" Step 4. backward pass \"\"\"\n",
+    "        loss.backward()\n",
+    "        \"\"\" Step 5. optimization \"\"\"\n",
+    "        optimizer.step()\n",
+    "        \"\"\" Step 6. record loss \"\"\"\n",
+    "        train_loss += loss.item()\n",
+    "        \n",
+    "    train_loss = train_loss / len(train_loader)\n",
+    "    if epoch % 20 == 0:\n",
+    "        train_loss_arr.append(np.mean(train_loss))\n",
+    "        print('Epoch: {} \\tTraining Loss: {:.6f}'.format(epoch+1, train_loss))\n",
+    "        evaluate(model, val_loader)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 172,
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "5a95e788419fa887d5aeff1bb2acda29",
+     "grade": false,
+     "grade_id": "cell-199ef9f45ea5ce75",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "\n",
+    "assert sorted(list(np.round(train_loss_arr[:5],2)), reverse=True) == list(np.round(train_loss_arr[:5],2)), f\"Training loss should decrease! Please check! Your training loss looks like at every 20 iterations {list(np.round(train_loss_arr, 2))}\""
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 173,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2021-02-01T17:13:50.998107Z",
+     "start_time": "2021-02-01T17:13:50.985881Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "8e6cec0503e0bedb1d59ce45283cbf05",
+     "grade": true,
+     "grade_id": "cell-a52f94729ecc1271",
+     "locked": true,
+     "points": 20,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "'\\nAUTOGRADER CELL. DO NOT MODIFY THIS.\\n'"
+      ]
+     },
+     "execution_count": 173,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "086d0c180355396f8f1254da12d70cb9",
+     "grade": false,
+     "grade_id": "cell-4524af04b7669b9f",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "---"
+   ]
+  }
+ ],
+ "metadata": {
+  "illinois_payload": {
+   "b64z": "",
+   "nb_path": "release/HW2_NN/HW2_NN.ipynb"
+  },
+  "kernelspec": {
+   "display_name": "Python 3 (Threads: 2)",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.8.6"
+  },
+  "toc": {
+   "base_numbering": 1,
+   "nav_menu": {},
+   "number_sections": false,
+   "sideBar": true,
+   "skip_h1_title": true,
+   "title_cell": "Table of Contents",
+   "title_sidebar": "Contents",
+   "toc_cell": false,
+   "toc_position": {
+    "height": "calc(100% - 180px)",
+    "left": "10px",
+    "top": "150px",
+    "width": "292.390625px"
+   },
+   "toc_section_display": true,
+   "toc_window_display": true
+  },
+  "varInspector": {
+   "cols": {
+    "lenName": 16,
+    "lenType": 16,
+    "lenVar": 40
+   },
+   "kernels_config": {
+    "python": {
+     "delete_cmd_postfix": "",
+     "delete_cmd_prefix": "del ",
+     "library": "var_list.py",
+     "varRefreshCmd": "print(var_dic_list())"
+    },
+    "r": {
+     "delete_cmd_postfix": ") ",
+     "delete_cmd_prefix": "rm(",
+     "library": "var_list.r",
+     "varRefreshCmd": "cat(var_dic_list()) "
+    }
+   },
+   "position": {
+    "height": "524px",
+    "left": "1423px",
+    "right": "20px",
+    "top": "120px",
+    "width": "348px"
+   },
+   "types_to_exclude": [
+    "module",
+    "function",
+    "builtin_function_or_method",
+    "instance",
+    "_Feature"
+   ],
+   "window_display": false
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 4
+}

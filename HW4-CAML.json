@@ -1,0 +1,1333 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "78147c89acb95da720509fd8fde17cdb",
+     "grade": false,
+     "grade_id": "cell-043b3834e2251c57",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "# HW4 CAML\n",
+    "\n",
+    "In this question, we will implement Convolutional Attention for Multi-Label classification (CAML) proposed by Mullenbach et al. in the paper \"[Explainable Prediction of Medical Codes from Clinical Text](https://www.aclweb.org/anthology/N18-1100/)\".\n",
+    "\n",
+    "Clinical notes are text documents that are created by clinicians for each patient encounter. They are typically accompanied by medical codes, which describe the diagnosis and treatment. Annotating these codes is labor intensive and error prone; furthermore, the connection between the codes and the text is not annotated, obscuring the reasons and details behind specific diagnoses and treatments. Thus, let us implement CAML, an attentional convolutional network to predict medical codes from clinical text.\n",
+    "\n",
+    "<img src='img/clinical notes.png'>\n",
+    "\n",
+    "Image courtsey: [link](https://www.aclweb.org/anthology/2020.acl-demos.33/)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "bb7b004e4bfb12f0bfad7e99ed215486",
+     "grade": false,
+     "grade_id": "cell-9b8545858500e08b",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "---"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 161,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-12-16T16:29:45.161013Z",
+     "start_time": "2020-12-16T16:29:44.836096Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "af54cabf51904853797e267c2918fffa",
+     "grade": false,
+     "grade_id": "cell-d317e8882b4c1ee4",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "import os\n",
+    "import csv\n",
+    "import pickle\n",
+    "import random\n",
+    "import numpy as np\n",
+    "import torch\n",
+    "import torch.nn as nn\n",
+    "import torch.nn.functional as F"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 162,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-12-16T16:29:45.166445Z",
+     "start_time": "2020-12-16T16:29:45.162597Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "730942c407593f714de377a8cad30650",
+     "grade": false,
+     "grade_id": "cell-b9db8392c257c4bc",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "# set seed\n",
+    "seed = 24\n",
+    "random.seed(seed)\n",
+    "np.random.seed(seed)\n",
+    "torch.manual_seed(seed)\n",
+    "os.environ[\"PYTHONHASHSEED\"] = str(seed)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 163,
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "13c7d57b68c58274add83cb992df51c3",
+     "grade": false,
+     "grade_id": "cell-2bbd87497cae879c",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "DATA_PATH = \"../HW4-CAML-lib/data/\"\n",
+    "\n",
+    "assert os.path.isdir(DATA_PATH)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "999c7d2df4615b24341607d6d4395ecd",
+     "grade": false,
+     "grade_id": "cell-cec321cdee1c5804",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "---"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "72d5aeba9e4f2114bfdf1c11bc24e5e7",
+     "grade": false,
+     "grade_id": "cell-ed20c59c4389146e",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "## Dataset\n",
+    "\n",
+    "Navigate to the data folder `DATA_PATH`, there are several files:\n",
+    "\n",
+    "- `train_50.csv`, `test_50.csv`: these two files contains the data used for training and testing.\n",
+    "    - `SUBJECT_ID` refers to a unique patient.\n",
+    "    - `HADM_ID` refers to a unique hospital admission.\n",
+    "    - `TEXT` refers to the clinical text.\n",
+    "    - `LABELS` refers to the medical codes. We will predict the top 50 most frequent codes.\n",
+    "    - `length` refers to the length of the clinical text.\n",
+    "- `vocab.csv`: this file contains the vocabularies used in the clinical text.\n",
+    "- `TOP_50_CODES.csv`: this file contains the top 50 medical codes."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 164,
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "8069ef13706d0efc8b86144841c36941",
+     "grade": false,
+     "grade_id": "cell-aacbcf078a2057e2",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "test_50.csv  TOP_50_CODES.csv  train_50.csv  vocab.csv\r\n"
+     ]
+    }
+   ],
+   "source": [
+    "!ls {DATA_PATH}"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "6b83359d914ea755c80342028c195d46",
+     "grade": false,
+     "grade_id": "cell-178f03544d45359a",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "For example, the first admission in `train_50.csv` has:\n",
+    "- `SUBJECT_ID`: 43909\n",
+    "- `HADM_ID`: 167612\n",
+    "- `TEXT`: admission date discharge date date of birth sex f service medicine allergies patient recorded as having no known allergies to drugs attending last name namepattern4 chief complaint pea arrest major surgical or invasive procedure intubation history of present illness yof w a h o metastatic cancer to lung presents with pea arrest resuscitated and intubated found to have large pneumonia patient with no potential cure per hospital oncology providers family had decided to make patient comfort care measures only she was transferred to icu for extubation past medical history metastatic cancer social history nc family history nc physical exam afebrile on ventilator sating well in general nad follows commands understands situation and wants to be extubated lungs ctab while vented rrr no m r g pertinent results 43pm lactate 43pm comments green top 45pm urine hyaline 45pm urine rbc wbc bacteria few yeast many epi 45pm urine blood tr nitrite neg protein glucose tr ketone neg bilirubin neg urobilngn neg ph leuk tr 45pm urine color yellow appear hazy sp last name un 45pm pt ptt inr pt 45pm plt count 45pm neuts lymphs monos eos basos 45pm wbc rbc hgb hct mcv mch mchc rdw 45pm calcium phosphate magnesium 45pm ck mb notdone 45pm ctropnt 45pm ck cpk 45pm estgfr using this 45pm glucose urea n creat sodium potassium chloride total co2 anion gap 16pm o2 sat 16pm lactate 16pm type central ve brief hospital course the patient was admitted to the icu for terminal extubation she was made comfort care measures only and given her widely metastatic cancer and pneumonia as well as pea arrest her family had decided to make her comfort care only she was extubated in the icu and died within minutes medications on admission unknown discharge medications expired discharge disposition expired discharge diagnosis patient expired discharge condition patient expired discharge instructions patient expired followup instructions patient expired initials namepattern4 last name namepattern4 name8 md md md number\n",
+    "- `LABELS`: 311;496;486;96.71;427.31\n",
+    "- `length`: 323"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "1bd934542774c8c5fea3073243b2f68d",
+     "grade": false,
+     "grade_id": "cell-b630758f18c9255c",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "## 1 Prepare the Dataset [40 points]"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "89c0ec052ba04a3c2e09d6f9289390c2",
+     "grade": false,
+     "grade_id": "cell-596f4a6bda1cba51",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "### 1.1 Helper Functions [20 points]\n",
+    "\n",
+    "To begin, weith, let us first implement some helper functions we will use later."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 165,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-12-16T16:29:45.171189Z",
+     "start_time": "2020-12-16T16:29:45.168507Z"
+    },
+    "deletable": false
+   },
+   "outputs": [],
+   "source": [
+    "def to_index(sequence, token2idx):\n",
+    "    \"\"\"\n",
+    "    TODO: convert the sequnce of tokens to indices. \n",
+    "    If the word in unknown, then map it to `len(token2idx)'.\n",
+    "    \n",
+    "    INPUT:\n",
+    "        sequence (type: list of str): a sequence of tokens\n",
+    "        stoken2idx (type: dict): a dictionary mapping token to the corresponding index\n",
+    "    \n",
+    "    OUTPUT:\n",
+    "        indices (type: list of int): a sequence of indicies\n",
+    "        \n",
+    "    EXAMPLE:\n",
+    "        >>> sequence = ['hello', 'world', 'unknown_word']\n",
+    "        >>> token2idx = {'hello': 0, 'world': 1}\n",
+    "        >>> to_index(sequence, token2idx)\n",
+    "        [0, 1, 2]\n",
+    "    \"\"\"\n",
+    "    # your code here\n",
+    "    # raise NotImplementedError\n",
+    "    index = []\n",
+    "    for word in sequence:\n",
+    "        if word in token2idx:\n",
+    "            index.append(token2idx.get(word))\n",
+    "        else:\n",
+    "            index.append(len(token2idx))    \n",
+    "    \n",
+    "    return index"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 166,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-12-16T16:29:45.176574Z",
+     "start_time": "2020-12-16T16:29:45.173080Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "040eab6582c0e7c89041ad127f8d2f36",
+     "grade": true,
+     "grade_id": "cell-11d33200e2a6d319",
+     "locked": true,
+     "points": 10,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "\n",
+    "sequence = ['hello', 'world', 'unknown_word']\n",
+    "token2idx = {'hello': 0, 'world': 1}\n",
+    "assert to_index(sequence, token2idx) == [0, 1, 2], \"to_index() is wrong!\"\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 167,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-12-16T16:29:45.180795Z",
+     "start_time": "2020-12-16T16:29:45.178207Z"
+    },
+    "deletable": false
+   },
+   "outputs": [],
+   "source": [
+    "def to_multi_hot(label, size):\n",
+    "    \"\"\"\n",
+    "    TODO: convert the label to multi-hot.\n",
+    "    \n",
+    "    INPUT:\n",
+    "        label (type: list of int): class indices\n",
+    "        size (type: int): total number of distinct classes\n",
+    "    \n",
+    "    OUTPUT:\n",
+    "        multi_hot_label (type: list of int): multi-hot encoding for the input label\n",
+    "        \n",
+    "    EXAMPLE:\n",
+    "        >>> label = [1, 2, 3]\n",
+    "        >>> size = 4\n",
+    "        >>> to_multi_hot(label, size)\n",
+    "        [0, 1, 1, 1]\n",
+    "    \"\"\"\n",
+    "    # your code here\n",
+    "    # raise NotImplementedError\n",
+    "    \n",
+    "    multi_hot = [0] * size \n",
+    "    for multi_hot_label in label:\n",
+    "        multi_hot[multi_hot_label] += 1\n",
+    "    \n",
+    "    return multi_hot"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 168,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-12-16T16:29:45.185155Z",
+     "start_time": "2020-12-16T16:29:45.182389Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "a841baabca5cff24242c5e362a69b6fd",
+     "grade": true,
+     "grade_id": "cell-02273d9b6c56b9fe",
+     "locked": true,
+     "points": 10,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "\n",
+    "assert to_multi_hot([1, 2, 3], 4) == [0, 1, 1, 1], \"to_multi_hot is wrong!\"\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "d3510bb70e00b0c27ffb74888984da37",
+     "grade": false,
+     "grade_id": "cell-5fba963f23976f68",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "### 1.2 CustomDataset [10 points]\n",
+    "\n",
+    "Now, let us implement a custom dataset using PyTorch class `Dataset`, which will characterize the key features of the dataset we want to generate.\n",
+    "\n",
+    "We will use the clinical text as input and medical codes as output."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 169,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-12-16T16:29:45.195137Z",
+     "start_time": "2020-12-16T16:29:45.186851Z"
+    },
+    "deletable": false
+   },
+   "outputs": [],
+   "source": [
+    "from torch.utils.data import Dataset\n",
+    "\n",
+    "\n",
+    "class CustomDataset(Dataset):\n",
+    "    \n",
+    "    def __init__(self, filename):        \n",
+    "        # read in the data files\n",
+    "        data = []\n",
+    "        with open(filename, \"r\") as file:\n",
+    "            csv_reader = csv.DictReader(file, delimiter=',')\n",
+    "            for row in csv_reader:\n",
+    "                data.append(row)\n",
+    "        self.data = data\n",
+    "        # load word lookup\n",
+    "        self.idx2word, self.word2idx = self.load_lookup(f'{DATA_PATH}/vocab.csv', padding=True)\n",
+    "        # load code lookup\n",
+    "        self.idx2code, self.code2idx = self.load_lookup(f'{DATA_PATH}/TOP_50_CODES.csv')\n",
+    "        \n",
+    "    def load_lookup(self, filename, padding=False):\n",
+    "        \"\"\" load lookup for word or code \"\"\"\n",
+    "        tokens = set()\n",
+    "        with open(filename, 'r') as vocabfile:\n",
+    "            for i, line in enumerate(vocabfile):\n",
+    "                line = line.rstrip()\n",
+    "                if line != '':\n",
+    "                    tokens.add(line.strip())\n",
+    "        idx2token = {}\n",
+    "        if padding:  # padding with index 0\n",
+    "            idx2token[0] = '**PAD**'\n",
+    "        for w in sorted(tokens):\n",
+    "            idx2token[len(idx2token)] = w\n",
+    "        token2idx = {w:i for i,w in idx2token.items()}\n",
+    "        return idx2token, token2idx\n",
+    "    \n",
+    "    def to_multi_hot(self, label):\n",
+    "        multi_hot_label = [0] * len(self.idx2code)\n",
+    "        for idx in label:\n",
+    "            multi_hot_label[idx] = 1\n",
+    "        return multi_hot_label\n",
+    "        \n",
+    "    def __len__(self):\n",
+    "        \n",
+    "        \"\"\"\n",
+    "        TODO: Return the number of samples (i.e. admissions).\n",
+    "        \"\"\"\n",
+    "        \n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        return len(self.data)\n",
+    "    \n",
+    "    def __getitem__(self, index):\n",
+    "        \n",
+    "        \"\"\"\n",
+    "        TODO: Generates one sample of data.\n",
+    "\n",
+    "        STEP: 1. convert text to indices using to_index();\n",
+    "              2. convert labels to indices using to_index();\n",
+    "              3. convert labels to multi-hot using to_multi_hot();\n",
+    "        \"\"\"\n",
+    "        data = self.data[index]\n",
+    "        text = data['TEXT'].split(' ')\n",
+    "        labels = data['LABELS'].split(';')\n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        \n",
+    "        text = to_index(text, self.word2idx)\n",
+    "        labels = to_index(labels, self.code2idx)\n",
+    "        labels = to_multi_hot(labels, len(self.code2idx))\n",
+    "        \n",
+    "        # return text as long tensor, labels as float tensor;\n",
+    "        return torch.tensor(text, dtype=torch.long), torch.tensor(labels, dtype=torch.float)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 170,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-12-16T16:29:45.218652Z",
+     "start_time": "2020-12-16T16:29:45.198333Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "268799649635506a59cd60ea8fbb2984",
+     "grade": true,
+     "grade_id": "cell-e8c7d116429a581c",
+     "locked": true,
+     "points": 10,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "\n",
+    "dataset = CustomDataset(f'{DATA_PATH}/train_50.csv')\n",
+    "assert len(dataset) == 84, \"__len__() is wrong!\"\n",
+    "\n",
+    "text, labels = dataset[1]\n",
+    "\n",
+    "assert type(text) is torch.Tensor, \"__getitem__(): text is not tensor!\"\n",
+    "assert type(labels) is torch.Tensor, \"__getitem__(): labels is not tensor!\"\n",
+    "assert text.dtype is torch.int64, \"__getitem__(): text is not of type long!\"\n",
+    "assert labels.dtype is torch.float32, \"__getitem__(): labels is not of type float!\"\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "a19beb39e21dcca622cb2a2e5224581f",
+     "grade": false,
+     "grade_id": "cell-daaa70c527405c14",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "### 1.3 Collate Function [10 points]\n",
+    "\n",
+    "The collate function `collate_fn()` will be called by `DataLoader` after fetching a list of samples using the indices from `CustomDataset` to collate the list of samples into batches.\n",
+    "\n",
+    "For example, assume the `DataLoader` gets a list of two samples.\n",
+    "\n",
+    "```\n",
+    "[ [3,  1,  2, 8, 5], \n",
+    "  [12, 13, 6, 7, 12, 23, 11] ]\n",
+    "```\n",
+    "\n",
+    "where the first sample has text `[3, 1, 2, 8, 5]` the second sample has text `[12, 13, 6, 7, 12, 23, 11]`.\n",
+    "\n",
+    "The collate function `collate_fn()` is supposed to pad them into the same shape (7), where 7 is the maximum number of tokens.\n",
+    "\n",
+    "``` \n",
+    "[ [3,  1,  2, 8, 5, *0*, *0*], \n",
+    "  [12, 13, 6, 7, 12, 23,  11 ]\n",
+    "```\n",
+    "\n",
+    "where `*0*` indicates the padding token.\n",
+    "\n",
+    "We need to pad the sequences into the same length so that we can do batch training on GPU. And we also need this mask so that when training, we can ignored the padded value as they actually do not contain any information."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 171,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-12-16T16:29:45.224609Z",
+     "start_time": "2020-12-16T16:29:45.221393Z"
+    },
+    "deletable": false
+   },
+   "outputs": [],
+   "source": [
+    "from torch.nn.utils.rnn import pad_sequence\n",
+    "\n",
+    "def collate_fn(data):\n",
+    "    \"\"\"\n",
+    "    TODO: implement the collate function.\n",
+    "    \n",
+    "    STEP: 1. pad the text using pad_sequence(). Set `batch_first=True`.\n",
+    "          2. stack the labels using torch.stack().\n",
+    "          \n",
+    "    OUTPUT:\n",
+    "        text: the padded text, shape: (batch size, max length)\n",
+    "        labels: the stacked labels, shape: (batch size, num classes)\n",
+    "    \"\"\"\n",
+    "    text, labels = zip(*data)\n",
+    "    text = pad_sequence(text, batch_first=True, padding_value=0)\n",
+    "    labels = torch.stack(labels)\n",
+    "    \n",
+    "    # your code here\n",
+    "    # raise NotImplementedError\n",
+    "    \n",
+    "    \n",
+    "    return text, labels"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 172,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-12-16T16:29:45.247425Z",
+     "start_time": "2020-12-16T16:29:45.226346Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "63adc73a0dcdf69c759d4e8ea2e6969d",
+     "grade": true,
+     "grade_id": "cell-32d1eba472825eea",
+     "locked": true,
+     "points": 10,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "\n",
+    "from torch.utils.data import DataLoader\n",
+    "\n",
+    "dataset = CustomDataset(f'{DATA_PATH}/train_50.csv')\n",
+    "loader = DataLoader(dataset, batch_size=10, collate_fn=collate_fn)\n",
+    "loader_iter = iter(loader)\n",
+    "text, labels = next(loader_iter)\n",
+    "\n",
+    "assert text.shape == (10, 612), \"collate_fn(): text has incorrect shape!\"\n",
+    "assert labels.shape == (10, 50), \"collate_fn(): labels has incorrect shape!\"\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "b6a670c1278fff9c7487f58b93ae170d",
+     "grade": false,
+     "grade_id": "cell-145a61ccecdd1746",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "All done, now let us load the dataset and data loader."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 173,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-12-16T16:29:45.273632Z",
+     "start_time": "2020-12-16T16:29:45.248796Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "2d9feae94d1d786af947e392184a6238",
+     "grade": false,
+     "grade_id": "cell-6d2616a603b45e97",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "train_set = CustomDataset(f'{DATA_PATH}/train_50.csv')\n",
+    "test_set = CustomDataset(f'{DATA_PATH}/test_50.csv')\n",
+    "train_loader = DataLoader(train_set, batch_size=32, collate_fn=collate_fn, shuffle=True)\n",
+    "test_loader = DataLoader(test_set, batch_size=32, collate_fn=collate_fn)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "e7a667fd37c57a66dae066cb91d3e9f5",
+     "grade": false,
+     "grade_id": "cell-be04e864f3d431f9",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "## 2 Model [50 points]\n",
+    "\n",
+    "Next, we will implement the CAML model.\n",
+    "\n",
+    "<img src='img/caml.png'>\n",
+    "\n",
+    "CAML is a convolutional neural network (CNN)-based model. It employs a per-label attention mechanism, which allows the model to learn distinct document representations for each label."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 174,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-12-16T16:29:45.278794Z",
+     "start_time": "2020-12-16T16:29:45.275224Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "fd8df5c20556a7c634b75a1ea7a8d5d7",
+     "grade": false,
+     "grade_id": "cell-0fbfc2cf4703903b",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "def load_embeddings(embed_file):\n",
+    "    \"\"\" helper function used to load the word2vec word embeddings \"\"\"\n",
+    "    W = []\n",
+    "    with open(embed_file) as ef:\n",
+    "        for line in ef:\n",
+    "            line = line.rstrip().split()\n",
+    "            vec = np.array(line[1:]).astype(np.float)\n",
+    "            # normalizes the embeddings\n",
+    "            vec = vec / float(np.linalg.norm(vec) + 1e-6)\n",
+    "            W.append(vec)\n",
+    "        # UNK embedding, gaussian randomly initialized \n",
+    "        vec = np.random.randn(len(W[-1]))\n",
+    "        vec = vec / float(np.linalg.norm(vec) + 1e-6)\n",
+    "        W.append(vec)\n",
+    "    W = np.array(W)\n",
+    "    return W"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 182,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-12-16T16:29:45.656155Z",
+     "start_time": "2020-12-16T16:29:45.280481Z"
+    },
+    "deletable": false
+   },
+   "outputs": [],
+   "source": [
+    "from math import floor\n",
+    "from torch.nn.init import xavier_uniform_\n",
+    "\n",
+    "\n",
+    "class CAML(nn.Module):\n",
+    "\n",
+    "    def __init__(self, Y=50, embed_file=f'../HW4-CAML-lib/weights/processed_full.embed', kernel_size=10, num_filter_maps=16, embed_size=100, dropout=0.5):\n",
+    "        super(CAML, self).__init__()\n",
+    "        \n",
+    "        self.Y = Y  # number of codes\n",
+    "        self.embed_size = embed_size  # size of each embedding\n",
+    "        self.embed_drop = nn.Dropout(p=dropout)\n",
+    "\n",
+    "        # make embedding layer from pre-trained word2vec embeddings\n",
+    "        W = torch.Tensor(load_embeddings(embed_file))\n",
+    "        self.embed = nn.Embedding(W.size()[0], W.size()[1], padding_idx=0)\n",
+    "        self.embed.weight.data = W.clone()\n",
+    "\n",
+    "        # initialize conv layer as in 2.1\n",
+    "        self.conv = nn.Conv1d(self.embed_size, num_filter_maps, kernel_size=kernel_size, padding=int(floor(kernel_size/2)))\n",
+    "        xavier_uniform_(self.conv.weight)\n",
+    "\n",
+    "        # context vectors for computing attention as in 2.2\n",
+    "        self.U = nn.Linear(num_filter_maps, Y)\n",
+    "        xavier_uniform_(self.U.weight)\n",
+    "\n",
+    "        # final layer: create a matrix to use for the L binary classifiers as in 2.3\n",
+    "        self.final = nn.Linear(num_filter_maps, Y)\n",
+    "        xavier_uniform_(self.final.weight)\n",
+    "        \n",
+    "    def forward_embed(self, text):\n",
+    "        \"\"\"\n",
+    "        TODO: Feed text through the embedding (self.embed) and dropout layer (self.embed_drop).\n",
+    "        \n",
+    "        INPUT: \n",
+    "            text: (batch size, seq_len)\n",
+    "            \n",
+    "        OURPUT:\n",
+    "            text: (batch size, seq_len, embed_size)\n",
+    "        \"\"\"\n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        text = self.embed(text)\n",
+    "        text = self.embed_drop(text)\n",
+    "        \n",
+    "        return text\n",
+    "        \n",
+    "        \n",
+    "    def forward_conv(self, text):\n",
+    "        \"\"\"\n",
+    "        TODO: Feed text through the convolution layer (self.conv) and tanh activation function (F.tanh) \n",
+    "        in eq (1) in the paper.\n",
+    "        \n",
+    "        INTPUT:\n",
+    "            text: (batch size, embed_size, seq_len)\n",
+    "            \n",
+    "        OUTPUT:\n",
+    "            text: (batch size, num_filter_maps, seq_len)\n",
+    "        \"\"\"\n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        text = self.conv(text)\n",
+    "        text = F.tanh(text)\n",
+    "        \n",
+    "        return text \n",
+    "        \n",
+    "    def forward_calc_atten(self, text):\n",
+    "        \"\"\"\n",
+    "        TODO: calculate the attention weights in eq (2) in the paper.\n",
+    "        \n",
+    "        INPUT:\n",
+    "            text: (batch size, seq_len, num_filter_maps)\n",
+    "\n",
+    "        OUTPUT:\n",
+    "            alpha: (batch size, num_class, seq_len), the attention weights\n",
+    "            \n",
+    "        STEP: 1. multiply `self.U.weight` with `text` using torch.matmul();\n",
+    "              2. apply softmax using `F.softmax()`.\n",
+    "        \"\"\"\n",
+    "        # (batch size, seq_len, num_filter_maps) -> (batch size, num_filter_mapsseq_len)\n",
+    "        text = text.transpose(1,2)\n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        \n",
+    "        alpha = torch.matmul(self.U.weight, text)\n",
+    "        alpha = F.softmax(alpha, dim=2)\n",
+    "        \n",
+    "        return alpha\n",
+    "        \n",
+    "    def forward_aply_atten(self, alpha, text):\n",
+    "        \"\"\"\n",
+    "        TODO: apply the attention in eq (3) in the paper.\n",
+    "\n",
+    "        INPUT: \n",
+    "            text: (batch size, seq_len, num_filter_maps)\n",
+    "            alpha: (batch size, num_class, seq_len), the attention weights\n",
+    "            \n",
+    "        OUTPUT:\n",
+    "            v: (batch size, num_class, num_filter_maps), vector representations for each label\n",
+    "            \n",
+    "        STEP: multiply `alpha` with `text` using torch.matmul().\n",
+    "        \"\"\"\n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        \n",
+    "        v = torch.matmul(alpha, text)\n",
+    "        \n",
+    "        return v\n",
+    "            \n",
+    "    def forward_linear(self, v):\n",
+    "        \"\"\"\n",
+    "        TODO: apply the final linear classification in eq (5) in the paper.\n",
+    "        \n",
+    "        INPUT: \n",
+    "            v: (batch size, num_class, num_filter_maps), vector representations for each label\n",
+    "            \n",
+    "        OUTPUT:\n",
+    "            y_hat: (batch size, num_class), label probability\n",
+    "            \n",
+    "        STEP: 1. multiply `self.final.weight` v `text` element-wise using torch.mul();\n",
+    "              2. sum the result over dim 2 (i.e. num_filter_maps);\n",
+    "              3. add the result with `self.final.bias`;\n",
+    "              4. apply sigmoid with torch.sigmoid().\n",
+    "        \"\"\"\n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        \n",
+    "        y_hat = torch.mul(v, self.final.weight)\n",
+    "        y_hat = torch.sum(y_hat, dim=2)\n",
+    "        y_hat = y_hat + self.final.bias\n",
+    "        y_hat = torch.sigmoid(y_hat)\n",
+    "        return y_hat\n",
+    "        \n",
+    "    def forward(self, text):\n",
+    "        \"\"\" 1. get embeddings and apply dropout \"\"\"\n",
+    "        text = self.forward_embed(text)\n",
+    "        # (batch size, seq_len, embed_size) -> (batch size, embed_size, seq_len);\n",
+    "        text = text.transpose(1, 2)\n",
+    "\n",
+    "        \"\"\" 2. apply convolution and nonlinearity (tanh) \"\"\"\n",
+    "        text = self.forward_conv(text)\n",
+    "        # (batch size, num_filter_maps, seq_len) -> (batch size, seq_len, num_filter_maps);\n",
+    "        text = text.transpose(1,2)\n",
+    "        \n",
+    "        \"\"\" 3. calculate attention \"\"\"\n",
+    "        alpha = self.forward_calc_atten(text)\n",
+    "        \n",
+    "        \"\"\" 3. apply attention \"\"\"\n",
+    "        v = self.forward_aply_atten(alpha, text)\n",
+    "           \n",
+    "        \"\"\" 4. final layer classification \"\"\"\n",
+    "        y_hat = self.forward_linear(v)\n",
+    "        \n",
+    "        return y_hat\n",
+    "    \n",
+    "    \n",
+    "model = CAML()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 183,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-12-16T16:29:46.102124Z",
+     "start_time": "2020-12-16T16:29:45.657596Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "a1379715239e0d2f59b0f40057682733",
+     "grade": true,
+     "grade_id": "cell-a8e0df4d7b626823",
+     "locked": true,
+     "points": 50,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "CAML(\n",
+       "  (embed_drop): Dropout(p=0.5, inplace=False)\n",
+       "  (embed): Embedding(3591, 100, padding_idx=0)\n",
+       "  (conv): Conv1d(100, 16, kernel_size=(10,), stride=(1,), padding=(5,))\n",
+       "  (U): Linear(in_features=16, out_features=50, bias=True)\n",
+       "  (final): Linear(in_features=16, out_features=50, bias=True)\n",
+       ")"
+      ]
+     },
+     "execution_count": 183,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "\n",
+    "model = CAML()\n",
+    "model.eval()  # disable dropout\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "04c4ef0eefc0ae8da055c91264ed7bf1",
+     "grade": false,
+     "grade_id": "cell-e768199c36c80533",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "## 3 Training and Inferencing [10 points]"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 177,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-12-16T16:29:46.428048Z",
+     "start_time": "2020-12-16T16:29:46.103913Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "a3f1f21afcf6042b7d83cca59087b20f",
+     "grade": false,
+     "grade_id": "cell-fc6958e6026c2fd9",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "model = CAML()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 178,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-12-16T16:29:46.431923Z",
+     "start_time": "2020-12-16T16:29:46.429473Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "4780437652156f863db908d37327c93a",
+     "grade": false,
+     "grade_id": "cell-b1a957b201a5269c",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "import torch.optim as optim\n",
+    "\n",
+    "optimizer = optim.Adam(model.parameters(), lr=0.001)\n",
+    "criterion = nn.BCELoss()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "5223c97e3da31f8bfed63b1013d2e968",
+     "grade": false,
+     "grade_id": "cell-e8ede5c4dd41ad6b",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "Now let us implement the `eval()` and `train()` function. Note that `train()` should call `eval()` at the end of each training epoch to see the results on the validaion dataset."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 179,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-12-16T16:29:47.139232Z",
+     "start_time": "2020-12-16T16:29:46.433471Z"
+    },
+    "deletable": false
+   },
+   "outputs": [],
+   "source": [
+    "from sklearn.metrics import precision_recall_fscore_support\n",
+    "\n",
+    "\n",
+    "def eval(model, test_loader):\n",
+    "    \n",
+    "    \"\"\"    \n",
+    "    INPUT:\n",
+    "        model: the CAML model\n",
+    "        test_loader: dataloader\n",
+    "        \n",
+    "    OUTPUT:\n",
+    "        precision: overall micro precision score\n",
+    "        recall: overall micro recall score\n",
+    "        f1: overall micro f1 score\n",
+    "        \n",
+    "    REFERENCE: checkout https://scikit-learn.org/stable/modules/classes.html#module-sklearn.metrics\n",
+    "    \"\"\"\n",
+    "\n",
+    "    model.eval()\n",
+    "    y_pred = torch.LongTensor()\n",
+    "    y_true = torch.LongTensor()\n",
+    "    model.eval()\n",
+    "    for sequences, labels in test_loader:\n",
+    "        \"\"\"\n",
+    "        TODO: 1. preform forward pass\n",
+    "              2. obtain the predicted class (0, 1) by comparing forward pass output against 0.5, \n",
+    "                 assign the predicted class to y_hat.\n",
+    "        \"\"\"\n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        \n",
+    "        y_hat = model.forward(sequences)\n",
+    "        y_hat = (y_hat >= 0.5)\n",
+    "\n",
+    "        y_pred = torch.cat((y_pred,  y_hat.detach().to('cpu')), dim=0)\n",
+    "        y_true = torch.cat((y_true, labels.detach().to('cpu')), dim=0)\n",
+    "    # print(y_true.shape, y_pred.shape)\n",
+    "    p, r, f, _ = precision_recall_fscore_support(y_true, y_pred, average='micro')\n",
+    "    return p, r, f"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 180,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-12-16T16:29:57.475379Z",
+     "start_time": "2020-12-16T16:29:47.141270Z"
+    },
+    "deletable": false
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Epoch: 1 \t Training Loss: 1.293948\n",
+      "Epoch: 1 \t Validation p: 0.19, r:0.36, f: 0.25\n",
+      "Epoch: 2 \t Training Loss: 1.095084\n",
+      "Epoch: 2 \t Validation p: 0.21, r:0.37, f: 0.27\n",
+      "Epoch: 3 \t Training Loss: 0.926836\n",
+      "Epoch: 3 \t Validation p: 0.21, r:0.42, f: 0.28\n",
+      "Epoch: 4 \t Training Loss: 0.858941\n",
+      "Epoch: 4 \t Validation p: 0.21, r:0.39, f: 0.27\n",
+      "Epoch: 5 \t Training Loss: 0.751255\n",
+      "Epoch: 5 \t Validation p: 0.22, r:0.38, f: 0.28\n"
+     ]
+    }
+   ],
+   "source": [
+    "def train(model, train_loader, test_loader, n_epochs):\n",
+    "    \"\"\"    \n",
+    "    INPUT:\n",
+    "        model: the CAML model\n",
+    "        train_loader: dataloder\n",
+    "        val_loader: dataloader\n",
+    "        n_epochs: total number of epochs\n",
+    "    \"\"\"\n",
+    "    model.train()\n",
+    "    for epoch in range(n_epochs):\n",
+    "        train_loss = 0\n",
+    "        for sequences, labels in train_loader:\n",
+    "            optimizer.zero_grad()\n",
+    "            \"\"\" \n",
+    "            TODO: 1. perform forward pass using `model`, save the output to y_hat;\n",
+    "                  2. calculate the loss using `criterion`, save the output to loss.\n",
+    "            \"\"\"\n",
+    "            y_hat, loss = None, None\n",
+    "            # your code here\n",
+    "            # raise NotImplementedError\n",
+    "            \n",
+    "            y_hat = model.forward(sequences)\n",
+    "            loss = criterion(y_hat, labels)\n",
+    "            \n",
+    "            loss.backward()\n",
+    "            optimizer.step()\n",
+    "            train_loss += loss.item()\n",
+    "        train_loss = train_loss / len(train_loader)\n",
+    "        print('Epoch: {} \\t Training Loss: {:.6f}'.format(epoch+1, train_loss))\n",
+    "        p, r, f = eval(model, test_loader)\n",
+    "        print('Epoch: {} \\t Validation p: {:.2f}, r:{:.2f}, f: {:.2f}'.format(epoch+1, p, r, f))\n",
+    "\n",
+    "    \n",
+    "# number of epochs to train the model\n",
+    "n_epochs = 5\n",
+    "\n",
+    "train(model, train_loader, test_loader, n_epochs)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 181,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-12-16T16:29:57.677177Z",
+     "start_time": "2020-12-16T16:29:57.477081Z"
+    },
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "f701b3673b0cf34b99c36cbd7310fa0c",
+     "grade": true,
+     "grade_id": "cell-d3d0cccc9e597b76",
+     "locked": true,
+     "points": 10,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "\n",
+    "p, r, f = eval(model, test_loader)\n",
+    "assert f > 0.20, \"f1 below 0.25!\"\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  }
+ ],
+ "metadata": {
+  "illinois_payload": {
+   "b64z": "",
+   "nb_path": "release/HW4-CAML/HW4-CAML.ipynb"
+  },
+  "kernelspec": {
+   "display_name": "Python 3 (Threads: 2)",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.8.8"
+  },
+  "toc": {
+   "base_numbering": 1,
+   "nav_menu": {},
+   "number_sections": false,
+   "sideBar": true,
+   "skip_h1_title": true,
+   "title_cell": "Table of Contents",
+   "title_sidebar": "Contents",
+   "toc_cell": false,
+   "toc_position": {},
+   "toc_section_display": true,
+   "toc_window_display": false
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 4
+}

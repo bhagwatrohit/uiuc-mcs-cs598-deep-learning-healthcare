@@ -1,0 +1,1292 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "08d13a70a134089b1f279135a0c3885e",
+     "grade": false,
+     "grade_id": "cell-d81b4e391e5f1b86",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "#  ECG Data Classification with MINA\n",
+    "\n",
+    "\n",
+    "In this section, you will implement an advanced CNN+RNN model with attention mechanism to classify ECG recordings. Specifically, we face a binary classification problem, and the goal is to distinguish atrial fibrillation(AF), an alternative rhythm, from the normal sinus rhythm. "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 261,
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "7b363280254a8bd52e4578d33a1beb53",
+     "grade": false,
+     "grade_id": "cell-1fdbbeceab82d1de",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "import os\n",
+    "import random\n",
+    "import numpy as np\n",
+    "import pandas as pd\n",
+    "import torch\n",
+    "import torch.nn as nn\n",
+    "import torch.nn.functional as F\n",
+    "\n",
+    "# set seed\n",
+    "seed = 24\n",
+    "random.seed(seed)\n",
+    "np.random.seed(seed)\n",
+    "torch.manual_seed(seed)\n",
+    "os.environ[\"PYTHONHASHSEED\"] = str(seed)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "d60f978702ff85b35901beee24820925",
+     "grade": false,
+     "grade_id": "cell-fc347cd1779b8abc",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "## 1 ECG Data Data\n",
+    "\n",
+    "We will be using a fraction of the data in the public [Physionet 2017 Challenge](https://physionet.org/content/challenge-2017/1.0.0/). More details can be found in the link.\n",
+    "\n",
+    "ECG recordings were sampled at 300Hz, and for the purpose of this task, the data we use is separated into 10-second-segments. "
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "4e5c1d8ddd1e8642a17abfbf624ca769",
+     "grade": false,
+     "grade_id": "cell-e2da856b9e4cecf5",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "### 1.1 Preprocessing\n",
+    "\n",
+    "Because the preprocessing of the data requires a tremendous amount of memory and time, for the sake of this homework, the data has already been preprocessed. \n",
+    "\n",
+    "Specifically, for each raw data (an ECG recording sampled at 300Hz), we did the following:\n",
+    "1. for each recording, we normalize the data to have a mean of 0 and a standard deviation of 1\n",
+    "2. slide and cut the recording into overlapping 10-second-segments (stride = $\\frac{5}{3}$ second for class 0, and $\\frac{5}{30}$ second for class 1 to oversample).\n",
+    "3. use FIR bandpass filter to transform the data from 1 channel to 4 channels.\n",
+    "4. split the data into training validation and test sets. Note that normally these short 10-second-segments that belong to the same recording should be in the same set (train/val/test). However, due to the computation constraint, we did not enforce this requirement, so that it's easier for the model to generalize.\n",
+    "\n",
+    "\n",
+    "The last step of the data preprocessing is computing the knowledge features. As we can see below, the AF signals exhibit different patterns at different levels. We computed knoledge features at different levels to guide the attention mechanism. More details are in Section 2.\n",
+    "![Beat/Rhythm/Frequency](pics/Data.png)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "000faeda9838d1094622aa20eea463c5",
+     "grade": false,
+     "grade_id": "cell-2f2ef91398b89a49",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "### 1.2 Load the Data\n",
+    "\n",
+    "Due to the resource constraints, the data and knowledge features have already been computed. Let's load them below."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 262,
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "7c5bba250d190675b1d7c1f51033aef8",
+     "grade": false,
+     "grade_id": "cell-683bbb341b249aa4",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "There are 1696 training data, 425 test data\n",
+      "Shape of X: (4, 3000) = (#channels, n)\n",
+      "Shape of beat feature: (4, 3000) = (#channels, n)\n",
+      "Shape of rhythm feature: (4, 60) = (#channels, M)\n",
+      "Shape of frequency feature: (4, 1) = (#channels, 1)\n"
+     ]
+    }
+   ],
+   "source": [
+    "data_path = './data' if os.path.isdir('./data') else \"../HW4_MINA-lib/data\"\n",
+    "train_dict = pd.read_pickle(os.path.join(data_path, 'train.pkl'))\n",
+    "test_dict = pd.read_pickle(os.path.join(data_path, 'test.pkl'))\n",
+    "\n",
+    "print(f\"There are {len(train_dict['Y'])} training data, {len(test_dict['Y'])} test data\")\n",
+    "print(f\"Shape of X: {train_dict['X'][:, 0,:].shape} = (#channels, n)\")\n",
+    "print(f\"Shape of beat feature: {train_dict['K_beat'][:, 0, :].shape} = (#channels, n)\")\n",
+    "print(f\"Shape of rhythm feature: {train_dict['K_rhythm'][:, 0, :].shape} = (#channels, M)\")\n",
+    "print(f\"Shape of frequency feature: {train_dict['K_freq'][:, 0, :].shape} = (#channels, 1)\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 263,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "(4, 1696, 3000) (1696,) (4, 1696, 3000) (4, 1696, 60) (4, 1696, 1) 5\n"
+     ]
+    }
+   ],
+   "source": [
+    "print(train_dict['X'].shape \n",
+    "      , train_dict['Y'].shape\n",
+    "      , train_dict['K_beat'].shape\n",
+    "      , train_dict['K_rhythm'].shape\n",
+    "      , train_dict['K_freq'].shape\n",
+    "      , len(train_dict))"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "5bcdedc741ad7c5b4b92c0b81aef35ed",
+     "grade": false,
+     "grade_id": "cell-d395e587202afcbf",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "You will need to define a ECGDataset class, and then define the DataLoader as well. "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 264,
+   "metadata": {
+    "deletable": false
+   },
+   "outputs": [],
+   "source": [
+    "from torch.utils.data import Dataset\n",
+    "\n",
+    "class ECGDataset(Dataset):\n",
+    "\n",
+    "    def __init__(self, data_dict):\n",
+    "        \"\"\"\n",
+    "        TODO: init the Dataset instance.\n",
+    "        \"\"\"\n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        self.data = data_dict\n",
+    "\n",
+    "    def __len__(self):\n",
+    "        \"\"\"\n",
+    "        TODO: Denotes the total number of samples\n",
+    "        \"\"\"\n",
+    "\n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        return len(self.data['Y'])\n",
+    "\n",
+    "    def __getitem__(self, i):\n",
+    "        \"\"\"\n",
+    "        TODO: Generates one sample of data\n",
+    "            return the ((X, K_beat, K_rhythm, K_freq), Y) for the i-th data.\n",
+    "            Be careful about which dimension you are indexing.\n",
+    "        \"\"\"\n",
+    "\n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        X = self.data['X'][:, i, :] \n",
+    "        K_beat = self.data['K_beat'][:, i, :] \n",
+    "        K_rhythm = self.data['K_rhythm'][:, i, :] \n",
+    "        K_freq = self.data['K_freq'][:, i, :] \n",
+    "        Y = self.data['Y'][i]\n",
+    "        item = ((X, K_beat, K_rhythm, K_freq), Y)\n",
+    "        return item\n",
+    "        \n",
+    "from torch.utils.data import DataLoader\n",
+    "def load_data(dataset, batch_size=128):\n",
+    "    \"\"\"\n",
+    "    Return a DataLoader instance basing on a Dataset instance, with batch_size specified.\n",
+    "    Note that since the data has already been shuffled, we set shuffle=False\n",
+    "    \"\"\"\n",
+    "    def my_collate(batch):\n",
+    "        \"\"\"\n",
+    "        :param batch: this is essentially [dataset[i] for i in [...]]\n",
+    "        batch[i] should be ((Xi, Ki_beat, Ki_rhythm, Ki_freq), Yi)\n",
+    "        TODO: write a collate function such that it outputs ((X, K_beat, K_rhythm, K_freq), Y)\n",
+    "            each output variable is a batched version of what's in the input *batch*\n",
+    "            For each output variable - it should be either float tensor or long tensor (for Y). \n",
+    "            If applicable, channel dim precedes batch dim\n",
+    "            e.g. the shape of each Xi is (# channels, n). \n",
+    "            In the output, X should be of shape (batch_size, # channels, n)\n",
+    "            \n",
+    "            RB: Shape of X should be (channel, batch_size, n)\n",
+    "        \"\"\"\n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        tup, Y = zip(*batch)\n",
+    "        X, K_beat, K_rhythm, K_freq = zip(*tup)   \n",
+    "        \n",
+    "        X = torch.tensor(X, dtype=torch.float).permute(1,0,2).contiguous()\n",
+    "        K_beat = torch.tensor(K_beat, dtype=torch.float).permute(1,0,2).contiguous()\n",
+    "        K_rhythm = torch.tensor(K_rhythm, dtype=torch.float).permute(1,0,2).contiguous()\n",
+    "        K_freq = torch.tensor(K_freq, dtype=torch.float).permute(1,0,2).contiguous()\n",
+    "        Y = torch.tensor(Y, dtype=torch.long)\n",
+    "        return (X, K_beat, K_rhythm, K_freq), Y\n",
+    "\n",
+    "    return torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False, collate_fn=my_collate)\n",
+    "\n",
+    "\n",
+    "train_loader = load_data(ECGDataset(train_dict))\n",
+    "test_loader = load_data(ECGDataset(test_dict))"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 265,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "[torch.Size([4, 128, 3000]), torch.Size([4, 128, 3000]), torch.Size([4, 128, 60]), torch.Size([4, 128, 1])]\n"
+     ]
+    }
+   ],
+   "source": [
+    "for x in train_loader:\n",
+    "    print([_tensor.shape for _tensor in x[0]])\n",
+    "    break"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 266,
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "56a22c06cab250dc1fe1d5b429c6c868",
+     "grade": true,
+     "grade_id": "cell-b26f1973e85606c6",
+     "locked": true,
+     "points": 10,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "\n",
+    "assert len(train_loader.dataset) == 1696, \"Length of training data incorrect.\"\n",
+    "assert len(train_loader) == 14, \"Length of the training dataloader incorrect - maybe check batch_size\"\n",
+    "assert [x.shape for x in train_loader.dataset[0][0]] == [(4,3000), (4,3000), (4,60), (4,1)], \"Shapes of the data don't match. Check __getitem__ implementation\"\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "0e87a011f3ecfa5ebe1d203a491ab4b4",
+     "grade": false,
+     "grade_id": "cell-51b2320e646b960e",
+     "locked": true,
+     "points": 0,
+     "schema_version": 3,
+     "solution": false,
+     "task": true
+    }
+   },
+   "source": [
+    "## 2 Model Defintions [70 points]\n",
+    "\n",
+    "Now, let us implement a model that involves RNN, CNN and attention mechanism. More specifically, we will implement [MINA: Multilevel Knowledge-Guided Attention for Modeling Electrocardiography Signals](https://www.ijcai.org/Proceedings/2019/0816.pdf).\n",
+    "\n",
+    "### 2.1 Knowledge-guided attention [15 points]\n",
+    "Knowledge-guided attention is an attention mechanism that introduces prior knowledge (such as features proposed by human experts) in the features used by the attention mechanism. We will first define the general KnowledgeAttn module, and use it at different levels later.\n",
+    "\n",
+    "There are three steps:\n",
+    "* 1\\. concatenate the input ($X$) and knowledge ($K$).\n",
+    "* 2\\. pass it through a linear layer, a tanh, another linear layer, and softmax: $attn = softmax(V^\\top \\tanh(W^\\top \\begin{bmatrix}X\\\\K\\end{bmatrix}))$\n",
+    "* 3\\. use attention values to sum $X$: $output = \\sum_{i=1}^D attn_i x_i$ where $attn_i$ is a scalar and $x_i$ is a vector."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 268,
+   "metadata": {
+    "ExecuteTime": {
+     "end_time": "2020-11-24T13:43:24.044942Z",
+     "start_time": "2020-11-24T13:43:24.042214Z"
+    },
+    "deletable": false
+   },
+   "outputs": [],
+   "source": [
+    "import torch.nn.functional as F\n",
+    "\n",
+    "class KnowledgeAttn(nn.Module):\n",
+    "    def __init__(self, input_features, attn_dim):\n",
+    "        \"\"\"\n",
+    "        This is the general knowledge-guided attention module.\n",
+    "        It will transform the input and knowledge with 2 linear layers, computes attention, and then aggregate.\n",
+    "        :param input_features: the number of features for each\n",
+    "        :param attn_dim: the number of hidden nodes in the attention mechanism\n",
+    "        TODO:\n",
+    "            define the following 2 linear layers WITHOUT bias (with the names provided)\n",
+    "                att_W: a Linear layer of shape (input_features + n_knowledge, attn_dim)\n",
+    "                att_v: a Linear layer of shape (attn_dim, 1)\n",
+    "            init the weights using self.init() (already given)\n",
+    "        \"\"\"\n",
+    "        super(KnowledgeAttn, self).__init__()\n",
+    "        self.input_features = input_features\n",
+    "        self.attn_dim = attn_dim\n",
+    "        self.n_knowledge = 1\n",
+    "\n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        self.att_W = nn.Linear(self.input_features + self.n_knowledge, self.attn_dim, bias = False)\n",
+    "        self.att_v = nn.Linear(self.attn_dim, 1, bias=False)\n",
+    "\n",
+    "        self.init()\n",
+    "\n",
+    "    def init(self):\n",
+    "        nn.init.normal_(self.att_W.weight)\n",
+    "        nn.init.normal_(self.att_v.weight)\n",
+    "\n",
+    "    @classmethod\n",
+    "    def attention_sum(cls, x, attn):\n",
+    "        \"\"\"\n",
+    "\n",
+    "        :param x: of shape (-1, D, nfeatures)\n",
+    "        :param attn: of shape (-1, D, 1)\n",
+    "        TODO: return the weighted sum of x along the middle axis with weights even in attn. output shoule be (-1, nfeatures)\n",
+    "        \"\"\"\n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        out = torch.sum(attn*x, dim=1)\n",
+    "        return out\n",
+    "\n",
+    "\n",
+    "    def forward(self, x, k):\n",
+    "        \"\"\"\n",
+    "        :param x: shape of (-1, D, input_features)\n",
+    "        :param k: shape of (-1, D, 1)\n",
+    "        :return:\n",
+    "            out: shape of (-1, input_features), the aggregated x\n",
+    "            attn: shape of (-1, D, 1)\n",
+    "        TODO:\n",
+    "            concatenate the input x and knowledge k together (on the last dimension)\n",
+    "            pass the concatenated output through the learnable Linear transforms\n",
+    "                first att_W, then tanh, then att_v\n",
+    "                the output shape should be (-1, D, 1)\n",
+    "            to get attention values, apply softmax on the output of linear layer\n",
+    "                You could use F.softmax(). Be careful which dimension you apply softmax over\n",
+    "            aggregate x using the attention values via self.attention_sum, and return\n",
+    "        \"\"\"\n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        \n",
+    "        c = torch.cat((x,k), dim=2)\n",
+    "        c = self.att_W(c)\n",
+    "        c = F.tanh(c)\n",
+    "        c = self.att_v(c)\n",
+    "        attn = F.softmax(c, dim=1)\n",
+    "        out = self.attention_sum(x, attn)\n",
+    "        \n",
+    "        return out, attn"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 269,
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "7096e60334041b0cf14a9cfcc75d52fa",
+     "grade": true,
+     "grade_id": "cell-ef150d8f011a0956",
+     "locked": true,
+     "points": 15,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "\n",
+    "def float_tensor_equal(a, b, eps=1e-3):\n",
+    "    return torch.norm(a-b).abs().max().tolist() < eps\n",
+    "\n",
+    "def testKnowledgeAttn():\n",
+    "    m = KnowledgeAttn(2, 2)\n",
+    "    m.att_W.weight.data = torch.tensor([[0.3298,  0.7045, -0.1067],\n",
+    "                                        [0.9656,  0.3090,  1.2627]], requires_grad=True)\n",
+    "    m.att_v.weight.data = torch.tensor([[-0.2368,  0.5824]], requires_grad=True)\n",
+    "\n",
+    "    x = torch.tensor([[[-0.6898, -0.9098], [0.0230,  0.2879], [-0.2534, -0.3190]],\n",
+    "                      [[ 0.5412, -0.3434], [0.0289, -0.2837], [-0.4120, -0.7858]]])\n",
+    "    k = torch.tensor([[ 0.5469,  0.3948, -1.1430], [0.7815, -1.4787, -0.2929]]).unsqueeze(2)\n",
+    "    out, attn = m(x, k)\n",
+    "\n",
+    "    tout = torch.tensor([[-0.2817, -0.2531], [0.2144, -0.4387]])\n",
+    "    tattn = torch.tensor([[[0.3482], [0.4475], [0.2043]],\n",
+    "                          [[0.5696], [0.1894], [0.2410]]])\n",
+    "    assert float_tensor_equal(attn, tattn), \"The attention values are wrong\"\n",
+    "    assert float_tensor_equal(out, tout), \"output of the attention module is wrong\"\n",
+    "testKnowledgeAttn()\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "ed2282e718fd5e2c892f13807b7655fe",
+     "grade": false,
+     "grade_id": "cell-8ed326aa3362e5ed",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "## 2.2 MINA [60 points]"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "72d1456bb89edb46d9d31d9cbcc45b60",
+     "grade": false,
+     "grade_id": "cell-048f0936985e30d0",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "We will now use the knowledge-guided attention mechanism to construct MINA. The overall structure is show below. From \"Input\" to \"Sliding Window Segmentation\" has already been done in the data preprocessing part, and in this section we will need to define things above \"Segment\"\n",
+    "![MINAstructure](pics/MINA_structure.png)\n",
+    "\n",
+    "\n",
+    "Here, CNN (`BeatNet`) is used to capture beat information, Bi-LSTM (`RhythmNet`) is used to capture rhythm level information, and the from $c^{(i)}$ to $p$ is aggregating frequency levle infomration (`FreqNet`). Note that although the input has 4 channels, we actually need to handle each channel separately because they have different meanings after we did the FIR. Thus, we will need 4 `BeatNet`s, 4 `RhythmNet`s, and 1 `FreqNet`. \n",
+    " "
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "7b0249a25b2e65554574f3ccf4385870",
+     "grade": false,
+     "grade_id": "cell-0d5314bb2c2c5ec6",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "MINA has three different knowledge guided attention mechanisms:\n",
+    " - Beat Level $K_{beat}$: extract beat knowledge which is represented by the first-order difference and a convolutional operation $Conv_\\alpha$ for each segment\n",
+    " - Rhythm Level $K_{rhythn}$: extract rhythm features represented by the standard deviation on each segment\n",
+    " - Frequency Level $K_{freq}$: frequency features are represented by the power spectral density (PSD), which is a popular measure of energy in signal processing.\n",
+    "\n",
+    "### 2.2.1 BeatNet [20 points]\n",
+    "For BeatNet, the attention $\\alpha$ is computed by the following:\n",
+    "    $$\\alpha = softmax(V_\\alpha^\\top \\tanh(W_\\alpha^\\top \\begin{bmatrix} \\mathbf{L}\\\\\\mathbf{K}_{beat} \\end{bmatrix}))$$\n",
+    "Here, $L$ is output by the convolutional layers, and $K_{beat}$ is the computed beat level knowledge features."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 270,
+   "metadata": {
+    "deletable": false
+   },
+   "outputs": [],
+   "source": [
+    "class BeatNet(nn.Module):\n",
+    "    #Attention for the CNN step/ beat level/local information\n",
+    "    def __init__(self, n=3000, T=50,\n",
+    "                 conv_out_channels=64):\n",
+    "        \"\"\"\n",
+    "        :param n: size of each 10-second-data\n",
+    "        :param T: size of each smaller segment used to capture local information in the CNN stage\n",
+    "        :param conv_out_channels: also called number of filters/kernels\n",
+    "        TODO: We will define a network that does two things. Specifically:\n",
+    "            1. use one 1-D convolutional layer to capture local informatoin, on x and k_beat (see forward())\n",
+    "                conv: The kernel size should be set to 32, and the number of filters should be set to *conv_out_channels*. \n",
+    "                    Stride should be *conv_stride*\n",
+    "                conv_k: same as conv, except that it has only 1 filter instead of *conv_out_channels*\n",
+    "            2. an attention mechanism to aggregate the convolution outputs. Specifically:\n",
+    "                attn: KnowledgeAttn with input_features equaling conv_out_channels, and attn_dim=att_cnn_dim\n",
+    "        \"\"\"\n",
+    "        super(BeatNet, self).__init__()\n",
+    "        self.n, self.M, self.T = n, int(n/T), T\n",
+    "        self.conv_out_channels = conv_out_channels\n",
+    "        self.conv_kernel_size = 32\n",
+    "        self.conv_stride = 2\n",
+    "        #Define conv and conv_k, the two Conv1d modules\n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        \n",
+    "        self.conv = nn.Conv1d(in_channels=1, out_channels=conv_out_channels , kernel_size=self.conv_kernel_size, \n",
+    "                              stride=self.conv_stride, bias=True)\n",
+    "        self.conv_k = nn.Conv1d(in_channels=1, out_channels=1 , kernel_size=self.conv_kernel_size, \n",
+    "                              stride=self.conv_stride, bias=True)\n",
+    "\n",
+    "        self.att_cnn_dim = 8\n",
+    "        #Define attn, the KnowledgeAttn module\n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        self.attn = KnowledgeAttn(input_features=self.conv_out_channels, attn_dim=self.att_cnn_dim)\n",
+    "\n",
+    "    def forward(self, x, k_beat):\n",
+    "        \"\"\"\n",
+    "        :param x: shape (batch, n)\n",
+    "        :param k_beat: shape (batch, n)\n",
+    "        :return:\n",
+    "            out: shape (batch, M, self.conv_out_channels)\n",
+    "            alpha: shape (batch * M, N, 1) where N is a result of convolution\n",
+    "        TODO:\n",
+    "            [Given] reshape the data - convert x/k_beat of shape (batch, n) to (batch * M, 1, T), where n = MT\n",
+    "                If you define the data carefully, you could use torch.Tensor.view() for all reshapes in this HW\n",
+    "            apply convolution on x and k_beat\n",
+    "                pass the reshaped x through self.conv, and then ReLU\n",
+    "                pass the reshaped k_beat through self.conv_k, and then ReLU\n",
+    "            (at this step, you might need to swap axix 1 & 2 to align the dimensions depending on how you defined the layers)\n",
+    "            pass the conv'd x and conv'd knowledge through self.attn to get the output (*out*) and attention (*alpha*)\n",
+    "            [Given] reshape the output *out* to be of shape (batch, M, self.conv_out_channels)\n",
+    "        \"\"\"\n",
+    "\n",
+    "        x = x.view(-1, self.T).unsqueeze(1)\n",
+    "        k_beat = k_beat.view(-1, self.T).unsqueeze(1)\n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        \n",
+    "        x = self.conv(x)\n",
+    "        x = F.relu(x)\n",
+    "        k_beat = self.conv_k(k_beat)\n",
+    "        k_beat = F.relu(k_beat)\n",
+    "                \n",
+    "        out, alpha = self.attn(x.permute(0,2,1), k_beat.permute(0,2,1))\n",
+    "        \n",
+    "        out = out.view(-1, self.M, self.conv_out_channels)\n",
+    "        return out, alpha"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 271,
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "eaa8a4a3c66cf041c1bba4cc1913ee1a",
+     "grade": true,
+     "grade_id": "cell-bd0c0614df001bfc",
+     "locked": true,
+     "points": 20,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "_testm = BeatNet(12 * 34, 34, 56)\n",
+    "assert isinstance(_testm.conv, torch.nn.Conv1d) and isinstance(_testm.conv_k, torch.nn.Conv1d), \"Should use nn.Conv1d\"\n",
+    "assert _testm.conv.bias.shape == torch.Size([56]) and _testm.conv.weight.shape == torch.Size([56,1,32]), \"conv definition is incorrect\"\n",
+    "assert _testm.conv_k.bias.shape == torch.Size([1]) and _testm.conv_k.weight.shape == torch.Size([1, 1, 32]), \"conv_k definition is incorrect\"\n",
+    "assert isinstance(_testm.attn, KnowledgeAttn), \"Should use one KnowledgeAttn Module\"\n",
+    "\n",
+    "_out, _alpha =_testm(torch.randn(37, 12*34), torch.randn(37, 12*34))\n",
+    "assert _alpha.shape == torch.Size([444,2,1]), \"The attention's dimension is incorrect\"\n",
+    "assert _out.shape==torch.Size([37, 12,56]), \"The output's dimension is incorrect\"\n",
+    "del _testm, _out, _alpha\n",
+    "\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "d34a00d6630667a2e27cc1d1e3df2f60",
+     "grade": false,
+     "grade_id": "cell-143d78d2776ddbed",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "### 2.2.2 RhythmNet [20 points]\n",
+    "For Rhythm, the attention $\\beta$ is computed by the following:\n",
+    "    $$\\beta = softmax(V_\\beta^\\top \\tanh(W_\\beta^\\top \\begin{bmatrix} \\mathbf{H}\\\\\\mathbf{K}_{rhythm} \\end{bmatrix}))$$\n",
+    "Here, $\\mathbf{H}$ is output by the Bi-LSTMs, and $K_{rhythm}$ is the computed rhythm level knowledge features."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 272,
+   "metadata": {
+    "deletable": false
+   },
+   "outputs": [],
+   "source": [
+    "class RhythmNet(nn.Module):\n",
+    "    def __init__(self, n=3000, T=50, input_size=64, rhythm_out_size=8):\n",
+    "        \"\"\"\n",
+    "        :param n: size of each 10-second-data\n",
+    "        :param T: size of each smaller segment used to capture local information in the CNN stage\n",
+    "        :param input_size: This is the same as the # of filters/kernels in the CNN part.\n",
+    "        :param rhythm_out_size: output size of this netowrk\n",
+    "        TODO: We will define a network that does two things to handle rhythms. Specifically:\n",
+    "            1. use a bi-directional LSTM to process the learned local representations from the CNN part\n",
+    "                lstm: bidirectional, 1 layer, batch_first, and hidden_size should be set to *rnn_hidden_size*\n",
+    "            2. an attention mechanism to aggregate the convolution outputs. Specifically:\n",
+    "                attn: KnowledgeAttn with input_features equaling lstm output, and attn_dim=att_rnn_dim\n",
+    "            3. output layers\n",
+    "                fc: a Linear layer making the output of shape (..., self.out_size)\n",
+    "                do: a Dropout layer with p=0.5\n",
+    "        \"\"\"\n",
+    "        #input_size is the cnn_out_channels\n",
+    "        super(RhythmNet, self).__init__()\n",
+    "        self.n, self.M, self.T = n, int(n/T), T\n",
+    "        self.input_size = input_size\n",
+    "\n",
+    "        self.rnn_hidden_size = 32\n",
+    "        ### define lstm: LSTM Input is of shape (batch size, M, input_size)\n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        self.lstm = nn.LSTM(input_size = self.input_size, batch_first=True, num_layers = 1, bidirectional = True, hidden_size = self.rnn_hidden_size)\n",
+    "\n",
+    "\n",
+    "        ### Attention mechanism: define attn to be a KnowledgeAttn\n",
+    "        self.att_rnn_dim = 8\n",
+    "        # your code here\n",
+    "        self.attn = KnowledgeAttn(self.rnn_hidden_size*2, self.att_rnn_dim)\n",
+    "        # raise NotImplementedError\n",
+    "\n",
+    "        ### Define the Dropout and fully connecte layers (fc and do)\n",
+    "        self.out_size = rhythm_out_size\n",
+    "        # your code here\n",
+    "        self.fc = nn.Linear(self.rnn_hidden_size*2, self.out_size)\n",
+    "        self.do = nn.Dropout(p=0.5)\n",
+    "        # raise NotImplementedError\n",
+    "\n",
+    "\n",
+    "\n",
+    "    def forward(self, x, k_rhythm):\n",
+    "        \"\"\"\n",
+    "        :param x: shape (batch, M, self.input_size)\n",
+    "        :param k_rhythm: shape (batch, M)\n",
+    "        :return:\n",
+    "            out: shape (batch, self.out_size)\n",
+    "            beta: shape (batch, M, 1)\n",
+    "        TODO:\n",
+    "            reshape the k_rhythm->(batch, M, 1) (HINT: use k_rhythm.unsqueeze())\n",
+    "            pass the reshaped x through lstm\n",
+    "            pass the lstm output and knowledge through attn\n",
+    "            pass the result through fully connected layer - ReLU - Dropout\n",
+    "            denote the final output as out, and the attention output as beta\n",
+    "        \"\"\"\n",
+    "\n",
+    "        # your code here\n",
+    "        k_rhythm = k_rhythm.unsqueeze(-1)\n",
+    "        out,(_,_) = self.lstm(x)\n",
+    "        out, beta = self.attn(out, k_rhythm)\n",
+    "        out = F.relu(self.fc(out))\n",
+    "        out = self.do(out)\n",
+    "        # raise NotImplementedError\n",
+    "        return out, beta"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 273,
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "c8fded85d3772cee990ca41d2d755525",
+     "grade": true,
+     "grade_id": "cell-8b673254a669937b",
+     "locked": true,
+     "points": 20,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "_B, _M, _T = 17, 23, 31\n",
+    "_testm = RhythmNet(_M * _T, _T, 37)\n",
+    "assert isinstance(_testm.lstm, torch.nn.LSTM), \"Should use nn.LSTM\"\n",
+    "assert _testm.lstm.bidirectional, \"LSTM should be bidirectional\"\n",
+    "assert isinstance(_testm.attn, KnowledgeAttn), \"Should use one KnowledgeAttn Module\"\n",
+    "assert isinstance(_testm.fc, nn.Linear) and _testm.fc.weight.shape == torch.Size([8,64]), \"The fully connected is incorrect\"\n",
+    "assert isinstance(_testm.do, nn.Dropout), \"Dropout layer is not defined correctly\"\n",
+    "\n",
+    "_out, _beta = _testm(torch.randn(_B, _M, 37), torch.randn(_B, _M))\n",
+    "assert _beta.shape == torch.Size([_B,_M,1]), \"The attention's dimension is incorrect\"\n",
+    "assert _out.shape==torch.Size([_B, 8]), \"The output's dimension is incorrect\"\n",
+    "del _testm, _out, _beta,  _B, _M, _T\n",
+    "\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "ce88267566036dea2817486941e2fb52",
+     "grade": false,
+     "grade_id": "cell-e9434c36630bceaa",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "### 2.2.3 FreqNet [20 points]\n",
+    "The attention $\\gamma$ is computed by the following:\n",
+    "    $$\\gamma = softmax(V_\\gamma^\\top \\tanh(W_\\gamma^\\top \\begin{bmatrix} \\mathbf{Q}\\\\\\mathbf{K}_{freq} \\end{bmatrix}))$$\n",
+    "Here, $\\mathbf{Q}$ is output of the RhythmNets, and $K_{freq}$ is the computed frequency level knowledge features."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 274,
+   "metadata": {
+    "deletable": false
+   },
+   "outputs": [],
+   "source": [
+    "class FreqNet(nn.Module):\n",
+    "    def __init__(self, n_channels=4, n=3000, T=50):\n",
+    "        \"\"\"\n",
+    "        :param n_channels: number of channels (F in the paper). We will need to define this many BeatNet & RhythmNet nets.\n",
+    "        :param n: size of each 10-second-data\n",
+    "        :param T: size of each smaller segment used to capture local information in the CNN stage\n",
+    "        TODO: This is the main network that orchestrates the previously defined attention modules:\n",
+    "            1. define n_channels many BeatNet and RhythmNet modules. (Hint: use nn.ModuleList)\n",
+    "                beat_nets: for each beat_net, pass parameter conv_out_channel into the init()\n",
+    "                rhythm_nets: for each rhythm_net, pass conv_out_channel as input_size, and self.rhythm_out_size as the output size\n",
+    "            2. define frequency (channel) level knowledge-guided attention module\n",
+    "                attn: KnowledgeAttn with input_features equaling rhythm_out_size, and attn_dim=att_channel_dim\n",
+    "            3. output layer: a Linear layer for 2 classes output\n",
+    "        \"\"\"\n",
+    "        super(FreqNet, self).__init__()\n",
+    "        self.n, self.M, self.T = n, int(n / T), T\n",
+    "        self.n_class = 2\n",
+    "        self.n_channels = n_channels\n",
+    "        self.conv_out_channels=64\n",
+    "        self.rhythm_out_size=8\n",
+    "\n",
+    "        self.beat_nets = nn.ModuleList()\n",
+    "        self.rhythm_nets = nn.ModuleList()\n",
+    "        #use self.beat_nets.append() and self.rhythm_nets.append() to append 4 BeatNets/RhythmNets\n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        for i in range(n_channels):\n",
+    "            self.beat_nets.append(BeatNet(self.n, self.T, conv_out_channels=self.conv_out_channels))\n",
+    "            self.rhythm_nets.append(RhythmNet(self.n, self.T, input_size=self.conv_out_channels, rhythm_out_size=self.rhythm_out_size))\n",
+    "\n",
+    "\n",
+    "        self.att_channel_dim = 2\n",
+    "        ### Add the frequency attention module using KnowledgeAttn (attn)\n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        self.attn = KnowledgeAttn(input_features=self.rhythm_out_size, attn_dim=self.att_channel_dim)\n",
+    "\n",
+    "        ### Create the fully-connected output layer (fc)\n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        self.fc = nn.Linear(self.rhythm_out_size, self.n_class, bias=True)\n",
+    "\n",
+    "\n",
+    "    def forward(self, x, k_beats, k_rhythms, k_freq):\n",
+    "        \"\"\"\n",
+    "        We need to use the attention submodules to process data from each channel separately, and then pass the\n",
+    "            output through an attention on frequency for the final output\n",
+    "\n",
+    "        :param x: shape (n_channels, batch, n)\n",
+    "        :param k_beats: (n_channels, batch, n)\n",
+    "        :param k_rhythms: (n_channels, batch, M)\n",
+    "        :param k_freq: (n_channels, batch, 1)\n",
+    "        :return:\n",
+    "            out: softmax output for each data point, shpae (batch, n_class)\n",
+    "            gama: the attention value on channels\n",
+    "        TODO:\n",
+    "            1. [Given] pass each channel of x through the corresponding beat_net, then rhythm_net.\n",
+    "                We will discard the attention (alpha and beta) outputs for now\n",
+    "                Using ModuleList for self.beat_nets/rhythm_nets is necessary for the gradient to propagate\n",
+    "            2. [Given] stack the output from 1 together into a tensor of shape (batch, n_channels, rhythm_out_size)\n",
+    "            3. pass result from 2 and k_freq through attention module, to get the aggregated result and *gama*\n",
+    "                You might need to do use k_freq.permute() to tweak the shape of k_freq\n",
+    "            4. pass aggregated result from 3 through the final fully connected layer.\n",
+    "            5. Apply Softmax to normalize output to a probability distribution (over 2 classes)\n",
+    "        \"\"\"\n",
+    "        # print(x.shape, k_freq.shape)\n",
+    "\n",
+    "        new_x = [None for _ in range(self.n_channels)]\n",
+    "        for i in range(self.n_channels):\n",
+    "            tx, _ = self.beat_nets[i](x[i], k_beats[i])\n",
+    "            new_x[i], _ = self.rhythm_nets[i](tx, k_rhythms[i])\n",
+    "        x = torch.stack(new_x, 1)  # [128,8] -> [128,4,8]\n",
+    "\n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        \n",
+    "        # print(x.shape, k_freq.shape)\n",
+    "        out, gama = self.attn(x, k_freq.permute(1,0,2))\n",
+    "        out = self.fc(out)\n",
+    "        out = F.softmax(out, dim=1)\n",
+    "        return out, gama"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 275,
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "5fbc37a4bf1f66dc557e3d4cd3d6cb1a",
+     "grade": true,
+     "grade_id": "cell-82b587bd3f11fae0",
+     "locked": true,
+     "points": 20,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "_B, _M, _T = 17, 59, 109\n",
+    "_testm = FreqNet(n=_M * _T, T=_T)\n",
+    "assert isinstance(_testm.attn, KnowledgeAttn), \"Should use one KnowledgeAttn Module\"\n",
+    "assert isinstance(_testm.fc, nn.Linear) and _testm.fc.weight.shape == torch.Size([2,8]), \"The fully connected is incorrect\"\n",
+    "assert isinstance(_testm.beat_nets, nn.ModuleList), \"beat_nets has to be a ModuleList\"\n",
+    "\n",
+    "_out, _gamma = _testm(torch.randn(4, _B, _M * _T), torch.randn(4, _B, _M * _T), torch.randn(4, _B, _M), torch.randn(4, _B, 1))\n",
+    "assert _gamma.shape == torch.Size([_B, 4, 1]), \"The attention's dimension is incorrect\"\n",
+    "assert _out.shape==torch.Size([_B, 2]), \"The output's dimension is incorrect\"\n",
+    "del _testm, _out, _gamma,  _B, _M, _T\n",
+    "\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "markdown",
+     "checksum": "e96ab553a56bc7073495c7d5b8616354",
+     "grade": false,
+     "grade_id": "cell-21afb56d006509f1",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "source": [
+    "# 3 Training and Evaluation [15 points]\n",
+    "In this part we will define the training procedures, train the model, and evaluate the model on the test set."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 276,
+   "metadata": {
+    "deletable": false
+   },
+   "outputs": [],
+   "source": [
+    "def train_model(model, train_dataloader, n_epoch=5, lr=0.003, device=None):\n",
+    "    import torch.optim as optim\n",
+    "    \"\"\"\n",
+    "    :param model: The instance of FreqNet that we are training\n",
+    "    :param train_dataloader: the DataLoader of the training data\n",
+    "    :param n_epoch: number of epochs to train\n",
+    "    :return:\n",
+    "        model: trained model\n",
+    "        loss_history: recorded training loss history - should be just a list of float\n",
+    "    TODO:\n",
+    "        Specify the optimizer (*optimizer*) to be optim.Adam\n",
+    "        Specify the loss function (*loss_func*) to be CrossEntropyLoss\n",
+    "        Within the loop, do the normal training procedures:\n",
+    "            pass the input through the model\n",
+    "            pass the output through loss_func to compute the loss\n",
+    "            zero out currently accumulated gradient, use loss.basckward to backprop the gradients, then call optimizer.step\n",
+    "    \"\"\"\n",
+    "    device = device or torch.device('cpu')\n",
+    "    model.train()\n",
+    "\n",
+    "    loss_history = []\n",
+    "\n",
+    "    # your code here\n",
+    "    # raise NotImplementedError\n",
+    "    optimizer = optim.Adam(model.parameters(), lr=lr)\n",
+    "    criterion = nn.CrossEntropyLoss()\n",
+    "\n",
+    "    for epoch in range(n_epoch):\n",
+    "        curr_epoch_loss = []\n",
+    "        for (X, K_beat, K_rhythm, K_freq), Y in train_dataloader:\n",
+    "            # your code here\n",
+    "            # raise NotImplementedError\n",
+    "            target_hat, _ = model(x=X, k_beats=K_beat, k_rhythms=K_rhythm, k_freq=K_freq)\n",
+    "            loss = criterion(target_hat, Y)\n",
+    "            optimizer.zero_grad()\n",
+    "            loss.backward()\n",
+    "            optimizer.step()\n",
+    "            \n",
+    "            curr_epoch_loss.append(loss.cpu().data.numpy())\n",
+    "        print(f\"epoch{epoch}: curr_epoch_loss={np.mean(curr_epoch_loss)}\")\n",
+    "        loss_history += curr_epoch_loss\n",
+    "    return model, loss_history\n",
+    "\n",
+    "def eval_model(model, dataloader, device=None):\n",
+    "    \"\"\"\n",
+    "    :return:\n",
+    "        pred_all: prediction of model on the dataloder.\n",
+    "            Should be an 2D numpy float array where the second dimension has length 2.\n",
+    "        Y_test: truth labels. Should be an numpy array of ints\n",
+    "    TODO:\n",
+    "        evaluate the model using on the data in the dataloder.\n",
+    "        Add all the prediction and truth to the corresponding list\n",
+    "        Convert pred_all and Y_test to numpy arrays (of shape (n_data_points, 2))\n",
+    "    \"\"\"\n",
+    "    device = device or torch.device('cpu')\n",
+    "    model.eval()\n",
+    "    pred_all = []\n",
+    "    Y_test = []\n",
+    "    for (X, K_beat, K_rhythm, K_freq), Y in dataloader:\n",
+    "        # your code here\n",
+    "        # raise NotImplementedError\n",
+    "        pred,_ = model(x=X, k_beats=K_beat, k_rhythms=K_rhythm, k_freq=K_freq)\n",
+    "        pred = pred.detach().numpy()\n",
+    "        pred_all.append(pred)\n",
+    "        y_test = Y \n",
+    "        Y_test.append(y_test)\n",
+    "        \n",
+    "    pred_all = np.concatenate(pred_all, axis=0)\n",
+    "    Y_test = np.concatenate(Y_test, axis=0)\n",
+    "\n",
+    "    return pred_all, Y_test"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 277,
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "e63abaf198c7e0874e95a5b781ea001c",
+     "grade": true,
+     "grade_id": "cell-85a8b3001bf2666b",
+     "locked": true,
+     "points": 0,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "'\\nAUTOGRADER CELL. DO NOT MODIFY THIS.\\n'"
+      ]
+     },
+     "execution_count": 277,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 278,
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "eb80c26eeb402d555cd006495aad3966",
+     "grade": false,
+     "grade_id": "cell-b518dc80db078e45",
+     "locked": true,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "epoch0: curr_epoch_loss=0.6842617988586426\n",
+      "epoch1: curr_epoch_loss=0.6223612427711487\n",
+      "epoch2: curr_epoch_loss=0.5307690501213074\n",
+      "epoch3: curr_epoch_loss=0.4914698600769043\n"
+     ]
+    }
+   ],
+   "source": [
+    "device = torch.device('cpu')\n",
+    "n_epoch = 4\n",
+    "lr = 0.003\n",
+    "n_channel = 4\n",
+    "n_dim=3000\n",
+    "T=50\n",
+    "\n",
+    "model = FreqNet(n_channel, n_dim, T)\n",
+    "model = model.to(device)\n",
+    "\n",
+    "model, loss_history = train_model(model, train_loader, n_epoch=n_epoch, lr=lr, device=device)\n",
+    "pred, truth = eval_model(model, test_loader, device=device)\n",
+    "#pd.to_pickle((pred, truth), \"./deliverable.pkl\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 279,
+   "metadata": {
+    "deletable": false
+   },
+   "outputs": [],
+   "source": [
+    "def evaluate_predictions(truth, pred):\n",
+    "    \"\"\"\n",
+    "    TODO: Evaluate the performance of the predictoin via AUROC, and F1 score\n",
+    "\n",
+    "    each prediction in pred is a vector representing [p_0, p_1].\n",
+    "    When defining the scores we are interesed in detecting class 1 only\n",
+    "    (Hint: use roc_auc_score and f1_score from sklearn.metrics)\n",
+    "    return: auroc, f1\n",
+    "    \"\"\"\n",
+    "    from sklearn.metrics import roc_auc_score, f1_score\n",
+    "\n",
+    "    # your code here\n",
+    "    # raise NotImplementedError\n",
+    "    auroc = roc_auc_score(truth, pred[:,1])\n",
+    "    f1 = f1_score(truth, 1*(pred[:,1]>0.5))\n",
+    "\n",
+    "    return auroc, f1"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 280,
+   "metadata": {
+    "deletable": false,
+    "editable": false,
+    "nbgrader": {
+     "cell_type": "code",
+     "checksum": "d3f21e8891cb8e802abcd1ef2783521a",
+     "grade": true,
+     "grade_id": "cell-5a6f298a1e4cf932",
+     "locked": true,
+     "points": 15,
+     "schema_version": 3,
+     "solution": false,
+     "task": false
+    }
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "AUROC=0.9121951219512194 and F1=0.8805620608899297\n"
+     ]
+    }
+   ],
+   "source": [
+    "'''\n",
+    "AUTOGRADER CELL. DO NOT MODIFY THIS.\n",
+    "'''\n",
+    "pred, truth = eval_model(model, test_loader, device=device)\n",
+    "auroc, f1 = evaluate_predictions(truth, pred)\n",
+    "print(f\"AUROC={auroc} and F1={f1}\")\n",
+    "\n",
+    "assert auroc > 0.8 and f1 > 0.7, \"Performance is too low {}. Something's probably off.\".format((auroc, f1))\n",
+    "\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  }
+ ],
+ "metadata": {
+  "illinois_payload": {
+   "b64z": "",
+   "nb_path": "release/HW4_MINA/HW4_MINA.ipynb"
+  },
+  "kernelspec": {
+   "display_name": "Python 3 (Threads: 2)",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.8.8"
+  },
+  "toc": {
+   "base_numbering": 1,
+   "nav_menu": {},
+   "number_sections": false,
+   "sideBar": true,
+   "skip_h1_title": true,
+   "title_cell": "Table of Contents",
+   "title_sidebar": "Contents",
+   "toc_cell": false,
+   "toc_position": {},
+   "toc_section_display": true,
+   "toc_window_display": false
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 4
+}
